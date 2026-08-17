@@ -344,25 +344,18 @@ bool append_socket_appearance_refresh_notification(
     if (target.instanceSoid != mutation.targetInstanceSoid) {
         return false;
     }
-    // The "Emotes" collection item's real content carries no native equipment-slot mapping at
-    // all, unlike every other character-scoped item. Kept self-consistent with the loadout
-    // resolver's own fallback: the emote slot's own native number, since that is where it is
-    // equipped.
-    constexpr std::uint8_t kEmoteCollectionNativeSlot = 14;
     state::build_data::items::details::Definition detail{};
+    std::uint8_t nativeEquipmentSlot = 0;
     if (!state::build_data::find_configured_item_detail(mutation.targetDefinitionIndex, detail)
         || detail.definitionIndex != mutation.targetDefinitionIndex
         || detail.definitionHash != mutation.targetDefinitionHash
         || detail.bucketId != mutation.targetBucketId
-        || (detail.equipmentSlot.has_value() && *detail.equipmentSlot < 0)
-        || (detail.equipmentSlot.has_value()
-            && static_cast<std::size_t>(*detail.equipmentSlot)
-                   >= state::build_data::items::details::kEquipmentSlotCount)) {
+        || !state::account::inventory::resolve_native_equipment_slot(
+            mutation.targetDefinitionHash, detail.equipmentSlot, nativeEquipmentSlot)
+        || static_cast<std::size_t>(nativeEquipmentSlot)
+               >= state::build_data::items::details::kEquipmentSlotCount) {
         return false;
     }
-    const std::uint8_t nativeEquipmentSlot = detail.equipmentSlot.has_value()
-                                                 ? static_cast<std::uint8_t>(*detail.equipmentSlot)
-                                                 : kEmoteCollectionNativeSlot;
     snapshot::Prepared prepared{};
     if (!snapshot::prepare_character_appearance_refresh(
             scratch,

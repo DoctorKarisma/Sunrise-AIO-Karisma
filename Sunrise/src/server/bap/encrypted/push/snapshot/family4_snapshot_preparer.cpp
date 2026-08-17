@@ -68,6 +68,13 @@ bool prepare(Scratch& scratch,
     if (!state::ensure_profile_item_identities()) {
         return report_failure("profile_identities");
     }
+    // The investment-refresh migration runs on the content-extraction path, which is not
+    // guaranteed to finish before the first Family-4 subscription is served on a cache-hit boot.
+    // Repeating it here, idempotently, is the only boundary that is actually ordered ahead of
+    // every possible first image.
+    if (!state::ensure_character_emote_collection()) {
+        return report_failure("emote_collection");
+    }
     const state::AccountState account = state::account_snapshot();
     if (!state::account::valid(account)) {
         return report_failure("account_state");
