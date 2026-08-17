@@ -139,8 +139,8 @@ bool resolve_item(const authored_inventory::Item& authored,
     if (!state::build_data::find_item_definition_hash(authored.definitionHash, itemDefinition)
         || !state::build_data::find_configured_item_detail(itemDefinition.definitionIndex,
                                                            itemDetail)
-        || itemDefinition.bucketId != itemDetail.bucketId || !itemDetail.equipmentSlot.has_value()
-        || *itemDetail.equipmentSlot < 0
+        || itemDefinition.bucketId != itemDetail.bucketId
+        || (itemDetail.equipmentSlot.has_value() && *itemDetail.equipmentSlot < 0)
         || !state::build_data::find_inventory_bucket_descriptor(itemDetail.bucketId, bucket)
         || bucket.arraySelector != build_buckets::ArraySelector::character
         || !state::build_data::find_socket_entry_list(itemDetail.socketEntryListIndex, socketList)
@@ -152,7 +152,14 @@ bool resolve_item(const authored_inventory::Item& authored,
 
     Candidate candidate{};
     candidate.bucket = bucket;
-    candidate.item.equipmentSlot = static_cast<std::uint8_t>(*itemDetail.equipmentSlot);
+    // The "Emotes" collection item's real content carries no native equipment-slot mapping at
+    // all, unlike every other character-scoped item. It is equipped in place of the individual
+    // emote (state::ensure_character_emote_collection), so it takes that slot's own native
+    // number here.
+    constexpr std::uint8_t kEmoteCollectionNativeSlot = 14;
+    candidate.item.equipmentSlot =
+        itemDetail.equipmentSlot.has_value() ? static_cast<std::uint8_t>(*itemDetail.equipmentSlot)
+                                             : kEmoteCollectionNativeSlot;
     candidate.item.mutationSerial = authored.mutationSerial;
     candidate.item.flags = authored.flags;
     if (!resolve_quantity(authored, itemDetail, candidate.item.quantity)

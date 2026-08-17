@@ -579,4 +579,64 @@ bool commit_profile_item_acquisition(PendingProfileItemAcquisition& mutation) no
     return ready;
 }
 
+/**
+ * Equips each character with the "Emotes" collection item in the real emote slot, in place of an
+ * individual emote. Unlike every other character-scoped item, its real content carries no native
+ * equipment-slot mapping at all, so the resolvers this depends on (loadout resolution, light,
+ * appearance refresh) fall back to that slot's own native number (14) for it specifically.
+ * Its 4 ordinary sockets carry no native default plug, so 4 hashes from its real reusable plug
+ * pool seed a default wheel; the client's own generic socket-plug request (opcode 1901) lets the
+ * player reassign them afterward, the same mechanism it already uses for weapon mods and shaders.
+ */
+bool ensure_character_emote_collection() noexcept {
+    constexpr std::uint32_t kEmoteCollectionHash = 3183180185U;
+    constexpr std::array<std::uint32_t, 4> kDefaultPlugHashes{
+        3134905452U, 4049365947U, 1046955906U, 181754010U};
+    constexpr std::size_t kEmoteCollectionSlot =
+        static_cast<std::size_t>(authored_inventory::EquipmentSlot::emote);
+
+    AcquireSRWLockExclusive(&runtime::storage::g_stateLock);
+    AccountState candidate = runtime::storage::g_state.account;
+    if (!account::valid(candidate)) {
+        ReleaseSRWLockExclusive(&runtime::storage::g_stateLock);
+        return true;
+    }
+    bool changed = false;
+    bool failed = false;
+    for (std::size_t characterIndex = 0;
+         characterIndex < candidate.characterCount && !failed;
+         ++characterIndex) {
+        CharacterState& character = candidate.characters[characterIndex];
+        auto& collectionSlot = character.equipment.slots[kEmoteCollectionSlot];
+        if (collectionSlot.has_value() && collectionSlot->definitionHash == kEmoteCollectionHash) {
+            continue;
+        }
+        std::uint64_t instanceSoid = 0;
+        if (!next_item_instance_soid(candidate, instanceSoid)) {
+            failed = true;
+            break;
+        }
+        authored_inventory::Item granted{};
+        granted.instanceSoid = instanceSoid;
+        granted.definitionHash = kEmoteCollectionHash;
+        granted.level = 0;
+        granted.quantity = 1;
+        granted.mutationSerial = static_cast<std::int32_t>(character.nextInventorySerial++);
+        granted.sockets.policy = authored_inventory::SocketPolicy::authored;
+        granted.sockets.plugCount = kDefaultPlugHashes.size();
+        for (std::size_t lane = 0; lane < kDefaultPlugHashes.size(); ++lane) {
+            granted.sockets.plugs[lane] = kDefaultPlugHashes[lane];
+        }
+        collectionSlot = granted;
+        changed = true;
+    }
+    if (failed || !changed || !account::valid(candidate)) {
+        ReleaseSRWLockExclusive(&runtime::storage::g_stateLock);
+        return !failed;
+    }
+    runtime::storage::g_state.account = candidate;
+    ReleaseSRWLockExclusive(&runtime::storage::g_stateLock);
+    return true;
+}
+
 } // namespace sunrise::state

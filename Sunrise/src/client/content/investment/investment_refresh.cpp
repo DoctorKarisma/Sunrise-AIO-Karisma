@@ -47,8 +47,9 @@ bool refresh() noexcept {
         // The same lock as the extraction path. A cache write holds its own lock across file
         // calls, so a held thread stopped inside one would deadlock the freeze below.
         AcquireSRWLockExclusive(&g_refreshLock);
-        const bool persisted =
-            state::ensure_profile_item_identities() && state::build_data::persist();
+        const bool persisted = state::ensure_profile_item_identities()
+                              && state::ensure_character_emote_collection()
+                              && state::build_data::persist();
         // Nothing reads a package again until the next boot, so the open files and the held
         // tables go back now rather than at process exit.
         middleware::content::packages::reader::release_caches();
@@ -65,8 +66,9 @@ bool refresh() noexcept {
     // The package pass owns the item table and must not wait on runtime content lookups.
     (void)items::packages::build();
     const bool domainsReady = ready();
-    const bool complete =
-        domainsReady && state::ensure_profile_item_identities() && state::build_data::persist();
+    const bool complete = domainsReady && state::ensure_profile_item_identities()
+                         && state::ensure_character_emote_collection()
+                         && state::build_data::persist();
     // The overlay ends with the work, not with the slice, so it spans every retry the pass needs.
     if (complete) {
         core::ui::busy::end(core::ui::busy::Task::contentExtraction);
