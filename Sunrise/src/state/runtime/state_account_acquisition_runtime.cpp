@@ -581,9 +581,25 @@ bool commit_profile_item_acquisition(PendingProfileItemAcquisition& mutation) no
 
 namespace {
 
-/** Default plug hashes the wheel seeds when granting or repairing the collection item's sockets. */
+/**
+ * Default plug hashes the wheel seeds when granting or repairing the collection item's sockets.
+ * All four are universal Common emotes from Bright Engrams, with no class or race restriction:
+ * "Yes" (3184938442), "Nope" (48790291), "Casual Sit" (383973261), "Cheer" (2834933816).
+ * Lane order follows the client's own wheel layout, confirmed empirically in-game:
+ * lane 0 = top, lane 1 = bottom, lane 2 = left, lane 3 = right.
+ */
+constexpr std::uint32_t kYesEmoteDefinitionHash = 3184938442U;
+constexpr std::uint32_t kNopeEmoteDefinitionHash = 48790291U;
+constexpr std::uint32_t kCasualSitEmoteDefinitionHash = 383973261U;
+constexpr std::uint32_t kCheerEmoteDefinitionHash = 2834933816U;
+
 constexpr std::array<std::uint32_t, authored_inventory::kEmoteCollectionSocketLaneCount>
-    kEmoteCollectionDefaultPlugHashes{3134905452U, 4049365947U, 1046955906U, 181754010U};
+    kEmoteCollectionDefaultPlugHashes{
+        kCheerEmoteDefinitionHash,     // lane 0 -- top
+        kCasualSitEmoteDefinitionHash, // lane 1 -- bottom
+        kYesEmoteDefinitionHash,       // lane 2 -- left
+        kNopeEmoteDefinitionHash,      // lane 3 -- right
+    };
 
 /**
  * Resolves and cross-checks the "Emotes" collection item's own configured content.
