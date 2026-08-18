@@ -357,14 +357,13 @@ bool append_socket_appearance_refresh_notification(
         return false;
     }
     snapshot::Prepared prepared{};
-    if (!snapshot::prepare_character_appearance_refresh(
-            scratch,
-            refresh,
-            mutation.afterCharacter,
-            mutation.characterIndex,
-            nativeEquipmentSlot,
-            true,
-            prepared)) {
+    if (!snapshot::prepare_character_appearance_refresh(scratch,
+                                                        refresh,
+                                                        mutation.afterCharacter,
+                                                        mutation.characterIndex,
+                                                        nativeEquipmentSlot,
+                                                        true,
+                                                        prepared)) {
         return false;
     }
     return append_appearance_frame(

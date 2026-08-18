@@ -602,15 +602,16 @@ constexpr std::array<std::uint32_t, authored_inventory::kEmoteCollectionSocketLa
     };
 
 /**
- * Resolves and cross-checks the "Emotes" collection item's own configured content.
+ * Resolves and cross-checks the "Emotes" collection item's own configured content. The detail row
+ * is only read to validate the definition, so it stays local rather than reaching the caller.
  * @param definition Receives the matching native item-definition row.
- * @param detail Receives the matching configured item detail.
  * @return True only when both rows agree with each other, carry no native equipment slot (the one
  *         trait that singles this item out among every character-scoped item), and declare exactly
  *         the expected 4 ordinary socket lanes.
  */
-[[nodiscard]] bool resolve_emote_collection_definition(build_data::items::Definition& definition,
-                                                        item_details::Definition& detail) noexcept {
+[[nodiscard]] bool
+resolve_emote_collection_definition(build_data::items::Definition& definition) noexcept {
+    item_details::Definition detail{};
     return build_data::find_item_definition_hash(authored_inventory::kEmoteCollectionDefinitionHash,
                                                  definition)
            && definition.definitionHash == authored_inventory::kEmoteCollectionDefinitionHash
@@ -630,7 +631,7 @@ constexpr std::array<std::uint32_t, authored_inventory::kEmoteCollectionSocketLa
     for (std::size_t lane = 0; lane < kEmoteCollectionDefaultPlugHashes.size(); ++lane) {
         build_data::items::Definition plugDefinition{};
         if (!build_data::find_item_definition_hash(kEmoteCollectionDefaultPlugHashes[lane],
-                                                    plugDefinition)
+                                                   plugDefinition)
             || !build_data::is_socket_plug_allowed(collectionDefinitionIndex,
                                                    static_cast<std::uint8_t>(lane),
                                                    plugDefinition.definitionIndex)) {
@@ -644,8 +645,8 @@ constexpr std::array<std::uint32_t, authored_inventory::kEmoteCollectionSocketLa
  * Checks an already-equipped collection item's own socket state, so a corrupted or stale set of
  * plugs is repaired instead of trusted just because the definition hash already matches.
  */
-[[nodiscard]] bool
-socket_state_sound(const authored_inventory::Item& item, std::uint16_t collectionDefinitionIndex) noexcept {
+[[nodiscard]] bool socket_state_sound(const authored_inventory::Item& item,
+                                      std::uint16_t collectionDefinitionIndex) noexcept {
     if (item.sockets.policy != authored_inventory::SocketPolicy::authored
         || item.sockets.plugCount != authored_inventory::kEmoteCollectionSocketLaneCount) {
         return false;
@@ -686,8 +687,7 @@ bool ensure_character_emote_collection() noexcept {
     // being wrong -- just isn't ready for the migration; skip this boot without failing the whole
     // refresh, the same way the account-not-ready check below does.
     build_data::items::Definition collectionDefinition{};
-    item_details::Definition collectionDetail{};
-    if (!resolve_emote_collection_definition(collectionDefinition, collectionDetail)
+    if (!resolve_emote_collection_definition(collectionDefinition)
         || !default_plugs_valid(collectionDefinition.definitionIndex)) {
         return true;
     }
@@ -700,16 +700,14 @@ bool ensure_character_emote_collection() noexcept {
     }
     bool changed = false;
     bool failed = false;
-    for (std::size_t characterIndex = 0;
-         characterIndex < candidate.characterCount && !failed;
+    for (std::size_t characterIndex = 0; characterIndex < candidate.characterCount && !failed;
          ++characterIndex) {
         CharacterState& character = candidate.characters[characterIndex];
         auto& collectionSlot = character.equipment.slots[kEmoteCollectionSlot];
-        const bool present = collectionSlot.has_value()
-                             && collectionSlot->definitionHash
-                                    == authored_inventory::kEmoteCollectionDefinitionHash;
-        if (present
-            && socket_state_sound(*collectionSlot, collectionDefinition.definitionIndex)) {
+        const bool present =
+            collectionSlot.has_value()
+            && collectionSlot->definitionHash == authored_inventory::kEmoteCollectionDefinitionHash;
+        if (present && socket_state_sound(*collectionSlot, collectionDefinition.definitionIndex)) {
             continue;
         }
         if (character.nextInventorySerial

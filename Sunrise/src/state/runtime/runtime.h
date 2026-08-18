@@ -16,10 +16,14 @@ namespace sunrise::state {
 [[nodiscard]] bool ensure_profile_item_identities() noexcept;
 
 /**
- * Equips each character with the "Emotes" collection item (hash 3183180185) in the emote slot,
- * in place of an individual emote, if it is not already equipped there. The stock client opens
- * its own wheel-configuration screen for this item; the 4 ordinary sockets seed default lanes
- * from its real plug pool so the wheel has something in every slot the first time it opens.
+ * Equips each character with the "Emotes" collection item (hash 3183180185) in the emote slot, in
+ * place of an individual emote. The stock client opens its own wheel-configuration screen for this
+ * item; its 4 ordinary sockets seed default lanes from the item's real plug pool so the wheel has
+ * something in every slot the first time it opens.
+ * Idempotent, and safe to call from more than one boundary: a character already carrying a sound
+ * copy is left alone, one whose sockets no longer resolve is repaired in place and keeps its
+ * existing instance identity, and a build whose content does not match what this expects is
+ * skipped rather than reported as a failure.
  */
 [[nodiscard]] bool ensure_character_emote_collection() noexcept;
 
