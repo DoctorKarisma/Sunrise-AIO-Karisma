@@ -91,6 +91,39 @@ The change added the remaining 121.
 None of the 288 slots collides with any documented entitlement, platform, or
 pre-release slot. The Director, map and orbit were verified working afterwards.
 
+## Ownership is not always the only gate
+
+An emote can carry more than one plug rule. The ownership rule at offset 720 is
+the common case, but a few items add a second rule immediately after it, and
+that one is a **value** comparison rather than a flag read. Such an emote reads
+as owned and still refuses to equip, showing *"Access Restricted"*.
+
+`X Marks The Spot` (`0x1682F6A3`) is the worked example in this build:
+
+| offset | expression | meaning |
+| ---: | --- | --- |
+| 720 | `FLAG(9004)` | ownership, set by `account_flag_runs` |
+| 736 | `VAL(5549) CONST(50) >=` | `VAL(5549) >= 50` |
+| 864 | `FLAG(9004)` | the enabled rule, pushed down by the extra rule |
+
+`VAL(5549)` is the objective progress counter for the *Golden Offerings*
+triumph, so the real requirement is completing that triumph. Value slots are
+not part of the flag banks; the route to them is the family-5 override list:
+
+```json
+"family5_value_overrides": [ ..., [5549,50] ]
+```
+
+Setting it to the threshold exactly, rather than inflating it, keeps any other
+expression that compares the same slot honest -- raising a value slot too far
+is what breaks unrelated content, per the shared-pool warning in the unlock
+documentation.
+
+Note this also shifts the layout: an emote with the extra rule has its enabled
+rule at 864 rather than 800. 32 of the 307 emotes in this build do not have a
+plain single-flag expression at 800 for this reason, which is expected and not
+a fault.
+
 ## Regenerating this
 
 The flag list is specific to this build; a content change invalidates it. To
