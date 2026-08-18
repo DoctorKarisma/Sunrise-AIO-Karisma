@@ -164,6 +164,9 @@ bool append_banner_notification(Scratch& scratch,
                                 std::size_t& written,
                                 queuez::SessionState& after) noexcept {
     after = before;
+    // Before the account is read, so this pair cannot describe a different account than the
+    // family-three roster or the family-four manifest.
+    ensure_account_canonical();
     // The pair names the first character when none is picked yet. The client's family-zero record
     // accepts a snapshot for about ten seconds, then clears the family and refuses every later
     // one, so holding the pair for the pick spends that window and the subscription times out.
@@ -241,6 +244,7 @@ bool append_banner_move_notification(Scratch& scratch,
     bool publish = false;
     bool incremental = false;
     after = before;
+    ensure_account_canonical();
     // A family zero with no first delivery yet has no ladder to move, and no root to name it with.
     const char* reason = nullptr;
     if (!queuez::stage_family0_subscription(
@@ -427,6 +431,7 @@ bool append_account_resync_appearance_notification(
     std::size_t& written,
     queuez::SessionState& after) noexcept {
     after = before;
+    ensure_account_canonical();
     if (!before.family0Active) {
         return true;
     }
@@ -469,6 +474,7 @@ bool append_account_resync_roster_notification(Scratch& scratch,
                                                std::size_t& written,
                                                queuez::SessionState& after) noexcept {
     after = before;
+    ensure_account_canonical();
     if (!before.family3Active) {
         return true;
     }

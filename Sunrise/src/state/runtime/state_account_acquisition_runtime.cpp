@@ -678,25 +678,29 @@ resolve_emote_collection_definition(build_data::items::Definition& definition) n
  * request (opcode 1901) lets the player reassign them afterward, the same mechanism it already uses
  * for weapon mods and shaders.
  */
-bool ensure_character_emote_collection() noexcept {
+EmoteCollectionOutcome ensure_character_emote_collection() noexcept {
     constexpr std::size_t kEmoteCollectionSlot =
         static_cast<std::size_t>(authored_inventory::EquipmentSlot::emote);
 
-    // The installed content must actually match what this migration assumes before anything is
-    // touched. A build whose "Emotes" collection item doesn't resolve this way yet -- rather than
-    // being wrong -- just isn't ready for the migration; skip this boot without failing the whole
-    // refresh, the same way the account-not-ready check below does.
+    // The domains every check below reads have to be published first. Until they are, nothing can
+    // be concluded about the installed content, so this is a retry rather than a verdict.
+    if (!build_data::item_definitions_ready() || !build_data::configured_item_details_ready()
+        || !build_data::socket_plug_rules_ready()) {
+        return EmoteCollectionOutcome::notReady;
+    }
+    // With those published, an item that still does not resolve this way is a build that cannot
+    // carry the wheel at all. Retrying that within this process would never change the answer.
     build_data::items::Definition collectionDefinition{};
     if (!resolve_emote_collection_definition(collectionDefinition)
         || !default_plugs_valid(collectionDefinition.definitionIndex)) {
-        return true;
+        return EmoteCollectionOutcome::unsupported;
     }
 
     AcquireSRWLockExclusive(&runtime::storage::g_stateLock);
     AccountState candidate = runtime::storage::g_state.account;
     if (!account::valid(candidate)) {
         ReleaseSRWLockExclusive(&runtime::storage::g_stateLock);
-        return true;
+        return EmoteCollectionOutcome::notReady;
     }
     bool changed = false;
     bool failed = false;
@@ -715,18 +719,26 @@ bool ensure_character_emote_collection() noexcept {
             failed = true;
             break;
         }
-        // A repair keeps the existing instance identity; only a fresh grant needs a new one.
-        std::uint64_t instanceSoid = present ? collectionSlot->instanceSoid : 0;
-        if (!present && !next_item_instance_soid(candidate, instanceSoid)) {
-            failed = true;
-            break;
+        // A repair owns only the definition, the sockets and the serial. Everything else the item
+        // already carries, the accumulated item-state flags above all, belongs to the player and
+        // survives. The account was checked whole on entry, so a present item's remaining scalars
+        // are already known good and need no normalizing here.
+        authored_inventory::Item granted = present ? *collectionSlot : authored_inventory::Item{};
+        if (!present) {
+            std::uint64_t instanceSoid = 0;
+            if (!next_item_instance_soid(candidate, instanceSoid)) {
+                failed = true;
+                break;
+            }
+            granted.instanceSoid = instanceSoid;
+            granted.level = 0;
+            granted.quantity = 1;
         }
-        authored_inventory::Item granted{};
-        granted.instanceSoid = instanceSoid;
         granted.definitionHash = authored_inventory::kEmoteCollectionDefinitionHash;
-        granted.level = 0;
-        granted.quantity = 1;
         granted.mutationSerial = static_cast<std::int32_t>(character.nextInventorySerial++);
+        // Replaced whole rather than edited: the lanes past the used prefix have to be empty for
+        // the socket block to validate, whatever the malformed copy left behind.
+        granted.sockets = authored_inventory::Sockets{};
         granted.sockets.policy = authored_inventory::SocketPolicy::authored;
         granted.sockets.plugCount = kEmoteCollectionDefaultPlugHashes.size();
         for (std::size_t lane = 0; lane < kEmoteCollectionDefaultPlugHashes.size(); ++lane) {
@@ -737,19 +749,19 @@ bool ensure_character_emote_collection() noexcept {
     }
     if (failed) {
         ReleaseSRWLockExclusive(&runtime::storage::g_stateLock);
-        return false;
+        return EmoteCollectionOutcome::failed;
     }
     if (!changed) {
         ReleaseSRWLockExclusive(&runtime::storage::g_stateLock);
-        return true;
+        return EmoteCollectionOutcome::ready;
     }
     if (!account::valid(candidate)) {
         ReleaseSRWLockExclusive(&runtime::storage::g_stateLock);
-        return false;
+        return EmoteCollectionOutcome::failed;
     }
     runtime::storage::g_state.account = candidate;
     ReleaseSRWLockExclusive(&runtime::storage::g_stateLock);
-    return true;
+    return EmoteCollectionOutcome::ready;
 }
 
 } // namespace sunrise::state
