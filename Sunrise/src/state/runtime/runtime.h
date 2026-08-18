@@ -241,6 +241,7 @@ struct PendingSocketPlug {
     std::uint8_t materialRequirementCount{};
     bool profileChanged{};
     bool targetEquipped{};
+    bool unrestricted{};
     bool prepared{};
 };
 
@@ -442,6 +443,16 @@ commit_profile_item_acquisition(PendingProfileItemAcquisition& mutation) noexcep
                                        std::uint8_t socketLane,
                                        std::uint16_t plugDefinitionIndex,
                                        PendingSocketPlug& mutation) noexcept;
+
+/** Prepares an editor socket change without compatibility or material costs. */
+[[nodiscard]] bool prepare_socket_plug_unrestricted(std::uint64_t targetInstanceSoid,
+                                                    std::uint8_t socketLane,
+                                                    std::uint16_t plugDefinitionIndex,
+                                                    PendingSocketPlug& mutation) noexcept;
+
+/** Replaces one selected-character item definition in place. */
+[[nodiscard]] bool replace_item_definition_unrestricted(
+    std::uint64_t targetInstanceSoid, std::uint32_t replacementDefinitionHash) noexcept;
 
 /**
  * Prepares one ordinary-socket selection for an exact character-screen item selector.

@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|x64">
@@ -509,6 +509,7 @@
     <ClCompile Include="src\server\ui\activity_override\activity_override_panel.cpp" />
     <ClCompile Include="src\server\ui\activity_override\activity_override_lists.cpp" />
     <ClCompile Include="src\server\ui\spawn\spawn_panel.cpp" />
+    <ClCompile Include="src\server\ui\weapon_editor\weapon_editor_panel.cpp" />
     <ClCompile Include="src\server\transport\bap_listener.cpp" />
     <ClCompile Include="src\server\bap\bap_route.cpp" />
     <ClCompile Include="src\server\bap\plaintext.cpp" />
@@ -1135,6 +1136,7 @@
     <ClInclude Include="src\server\ui\activity_override\activity_override_panel.h" />
     <ClInclude Include="src\server\ui\activity_override\activity_override_lists.h" />
     <ClInclude Include="src\server\ui\spawn\spawn_panel.h" />
+    <ClInclude Include="src\server\ui\weapon_editor\weapon_editor_panel.h" />
     <ClInclude Include="src\server\bap\runtime.h" />
     <ClInclude Include="src\server\bap\internal.h" />
     <ClInclude Include="src\server\bap\encrypted\internal.h" />

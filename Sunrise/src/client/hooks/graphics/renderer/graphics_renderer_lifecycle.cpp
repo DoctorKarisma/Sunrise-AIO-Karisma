@@ -249,6 +249,7 @@ void release_render_target(Resources& resources) noexcept {
 /** @param resources SDK resources freed in an order that respects their dependencies. */
 void release_resources(Resources& resources) noexcept {
     release_render_target(resources);
+    textures::release_item_icons();
     textures::release_logo_sheet(resources.logoSheet);
     release_com(resources.context);
     release_com(resources.device);

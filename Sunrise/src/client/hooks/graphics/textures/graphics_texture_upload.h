@@ -1,6 +1,8 @@
 #pragma once
 
+#include <cstdint>
 #include <d3d11.h>
+#include <imgui.h>
 
 namespace sunrise::client::hooks::graphics::textures {
 
@@ -20,5 +22,15 @@ struct Uploaded {
 
 /** @param uploaded Objects released and cleared, after the published slot is emptied. */
 void release_logo_sheet(Uploaded& uploaded) noexcept;
+
+/**
+ * Lazily resolves one bundled item/plug icon and uploads it on the active D3D11 device.
+ * A bounded LRU cache keeps scrolling the plug browser from growing GPU memory forever.
+ * @return ImGui texture identifier, or ImTextureID_Invalid when this hash has no bundled art.
+ */
+[[nodiscard]] ImTextureID item_icon(std::uint32_t definitionHash) noexcept;
+
+/** Releases every lazily uploaded item/plug icon before the renderer device is released. */
+void release_item_icons() noexcept;
 
 } // namespace sunrise::client::hooks::graphics::textures
