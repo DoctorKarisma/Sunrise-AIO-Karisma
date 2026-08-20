@@ -2,6 +2,7 @@
 
 #include <string_view>
 
+#include "../../core/settings/character_persistence.h"
 #include "../../core/settings/settings.h"
 #include "../../../resources/resource.h"
 #include "character_creation.h"
@@ -261,6 +262,12 @@ bool commit_character_creation(PendingCharacterCreation& mutation) noexcept {
         runtime::storage::g_state.account = after;
     }
     ReleaseSRWLockExclusive(&runtime::storage::g_stateLock);
+
+    // Persistence is deliberately outside the State lock and after the authoritative commit.
+    // A filesystem failure must not roll back a character the Client has already been told exists.
+    if (committed) {
+        (void)core::settings::persistence::store_character(prepared.createdCharacter);
+    }
     return committed;
 }
 
