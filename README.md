@@ -1,3 +1,9 @@
+## Sunrise-AIO
+
+This is a community-maintained AIO build of Sunrise, combining the latest changes from the upstream repositories with additional features and improvements.
+
+-------------------------------------------------
+
 # Sunrise
 
 Destiny 2 Offline Exploration Mod
