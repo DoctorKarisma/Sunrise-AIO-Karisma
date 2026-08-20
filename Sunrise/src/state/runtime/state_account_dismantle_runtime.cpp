@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "persistence/runtime_state_file.h"
 #include "runtime.h"
 #include "state_account_transaction_helpers.h"
 #include "storage/internal.h"
@@ -122,6 +123,8 @@ bool commit_item_dismantle(PendingItemDismantle& mutation) noexcept {
                      prepared.equipmentSlot,
                      prepared.movedInventoryItemCount,
                      prepared.afterCharacter.nextInventorySerial);
+    // Persisted only once the mutation is committed, so a refused one never reaches the file.
+    persistence::save();
     return true;
 }
 

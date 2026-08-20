@@ -382,6 +382,7 @@
     <ClCompile Include="src\steam\interfaces\tables\table_runtime.cpp" />
     <ClCompile Include="src\steam\interfaces\steam_interface_factory.cpp" />
     <ClCompile Include="src\state\runtime\state_runtime.cpp" />
+    <ClCompile Include="src\state\runtime\persistence\runtime_state_file.cpp" />
     <ClCompile Include="src\state\activity\activity_session_lookup.cpp" />
     <ClCompile Include="src\state\activity\activity_world_arrival.cpp" />
     <ClCompile Include="src\state\activity\membership\activity_membership_query.cpp" />
@@ -1022,6 +1023,7 @@
     <ClInclude Include="src\state\runtime\state_rolled_socket_plugs.h" />
     <ClInclude Include="src\state\runtime\state.h" />
     <ClInclude Include="src\state\runtime\storage\internal.h" />
+    <ClInclude Include="src\state\runtime\persistence\runtime_state_file.h" />
     <ClInclude Include="src\state\activity\definition.h" />
     <ClInclude Include="src\state\activity\defaults\definition.h" />
     <ClInclude Include="src\state\activity\defaults\activity_defaults_snapshot.h" />

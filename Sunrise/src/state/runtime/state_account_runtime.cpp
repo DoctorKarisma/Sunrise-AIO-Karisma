@@ -12,6 +12,7 @@
 #include "../../core/logging/log.h"
 #include "../../middleware/datagen/family4/loadout/loadout_resolver.h"
 #include "../build_data/runtime.h"
+#include "persistence/runtime_state_file.h"
 #include "runtime.h"
 #include "state.h"
 #include "state_account_transaction_helpers.h"
@@ -638,6 +639,8 @@ bool commit_equipment_swap(PendingEquipmentSwap& mutation) noexcept {
                      prepared.movedItemCount,
                      previousDefinitionHash,
                      requestedDefinitionHash);
+    // Persisted only once the mutation is committed, so a refused one never reaches the file.
+    persistence::save();
     return true;
 }
 

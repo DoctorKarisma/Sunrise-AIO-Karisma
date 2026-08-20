@@ -8,6 +8,7 @@
 #include "../../middleware/datagen/family4/loadout/loadout_resolver.h"
 #include "../../middleware/web_service/messages/opcode1901.h"
 #include "../build_data/runtime.h"
+#include "persistence/runtime_state_file.h"
 #include "runtime.h"
 #include "state_account_transaction_helpers.h"
 #include "storage/internal.h"
@@ -385,6 +386,8 @@ bool commit_socket_plug(PendingSocketPlug& mutation) noexcept {
                        prepared.plugBucketId,
                        prepared.targetEquipped,
                        prepared.itemIndex);
+    // Persisted only once the mutation is committed, so a refused one never reaches the file.
+    persistence::save();
     return true;
 }
 
@@ -511,6 +514,8 @@ bool commit_item_state(PendingItemState& mutation) noexcept {
                       prepared.afterFlags,
                       prepared.targetEquipped,
                       prepared.itemIndex);
+    // Persisted only once the mutation is committed, so a refused one never reaches the file.
+    persistence::save();
     return true;
 }
 
@@ -611,6 +616,8 @@ bool commit_subclass_selection(PendingSubclassSelection& mutation) noexcept {
     // The published ability buckets are keyed to whichever selection is currently active; that
     // just changed, so the domain is stale the moment the account write above becomes visible.
     build_data::invalidate_ability_buckets();
+    // Persisted only once the mutation is committed, so a refused one never reaches the file.
+    persistence::save();
     return true;
 }
 

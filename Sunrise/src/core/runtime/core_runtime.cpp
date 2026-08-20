@@ -14,6 +14,7 @@
 #include "../../server/runtime/server_runtime.h"
 #include "../../state/content_manifest/content_manifest_state_runtime.h"
 #include "../../state/entitlements/entitlement_runtime.h"
+#include "../../state/runtime/persistence/runtime_state_file.h"
 #include "../../state/runtime/runtime.h"
 #include "../../state/unlocks/unlocks_runtime.h"
 #include "../filesystem/path.h"
@@ -127,6 +128,13 @@ bool initialize(void* module) noexcept {
         } else if (!client::initialize(module)) {
             stage = "client";
         }
+    }
+    if (stage == nullptr) {
+        // The overlay carries the player's saved loadout on top of the authored account. It is
+        // deliberately not a boot stage: a bad overlay is reported and skipped, because losing a
+        // session's changes is worth far less than refusing to start. Nothing between State coming
+        // up and here reads the account, so applying it this late is safe.
+        state::persistence::load(module);
     }
     if (stage != nullptr) {
         report_stage_failure(stage);
