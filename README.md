@@ -1,6 +1,6 @@
 ## Sunrise-AIO
 
-This is a community-maintained AIO build of Sunrise, combining the latest changes from the upstream repositories with additional features and improvements.
+This is a community-maintained all-in-one build of Sunrise, combining the latest changes from the upstream repositories with additional features and improvements.
 
 -------------------------------------------------
 
