@@ -379,8 +379,10 @@ inline void report_step(const char* stage,
             rawStorage.first(patchSize),
         };
         staged.rawClearSize = (std::max)(staged.rawClearSize, patchSize);
+        report_step("select_account_patch", true, select.after, objectCount);
     } else {
         if (family4_datagen::account::layout::kObjectSize > rawStorage.size()) {
+            report_step("select_account_full_storage", false, select.after);
             return false;
         }
         const auto accountBytes = rawStorage.first(family4_datagen::account::layout::kObjectSize);
@@ -391,10 +393,12 @@ inline void report_step(const char* stage,
                                         select.after.family4RootSoid,
                                         staged.objects[objectCount++],
                                         compressedExtent)) {
+            report_step("select_account_full", false, select.after);
             return false;
         }
         staged.rawClearSize =
             (std::max)(staged.rawClearSize, family4_datagen::account::layout::kObjectSize);
+        report_step("select_account_full", true, select.after, objectCount);
     }
 
     staged.compressedClearSize = compressedExtent;
@@ -582,12 +586,11 @@ inline void report_step(const char* stage,
         return false;
     }
     ++family3After.family3Version;
-    // A created character that will be selected follows the same preselection phase contract as
-    // opcode 505. This makes stage_select_character() emit the proven selected-character account
-    // patch instead of resending the full live account body.
-    if (mutation.selectCreated) {
-        family3After.family3Phase = Family3Phase::publishOnce;
-    }
+    // Creation changes the account roster itself, so keep the normal Family-3 phase here.
+    // stage_select_character() will therefore use the measured first-pick path and publish the
+    // full Family-4 account after-image, including the newly created character. The compact
+    // selection patch is reserved for the opcode-505 preselection flow, where the roster did not
+    // change and resending the account body would wipe resident settings state.
     if (!valid(family3After) || family3.family.version != family3After.family3Version
         || family3.family.rootSoid != family3After.family3RootSoid) {
         detail::report_step(
