@@ -592,13 +592,17 @@ constexpr std::uint32_t kYesEmoteDefinitionHash = 3184938442U;
 constexpr std::uint32_t kNopeEmoteDefinitionHash = 48790291U;
 constexpr std::uint32_t kCasualSitEmoteDefinitionHash = 383973261U;
 constexpr std::uint32_t kCheerEmoteDefinitionHash = 2834933816U;
+constexpr std::uint32_t kLuxuriousToastEmoteDefinitionHash = 530754878U;
+constexpr std::uint32_t kGoodDoggoDefinitionHash = 1936179816U;
+constexpr std::uint32_t kSelfieDefinitionHash = 4111030162U;
+constexpr std::uint32_t SweepingDefinitionHash = 717948749U;
 
 constexpr std::array<std::uint32_t, authored_inventory::kEmoteCollectionSocketLaneCount>
     kEmoteCollectionDefaultPlugHashes{
-        kCheerEmoteDefinitionHash,     // lane 0 -- top
-        kCasualSitEmoteDefinitionHash, // lane 1 -- bottom
-        kYesEmoteDefinitionHash,       // lane 2 -- left
-        kNopeEmoteDefinitionHash,      // lane 3 -- right
+        SweepingDefinitionHash,             // lane 0 -- top
+        kLuxuriousToastEmoteDefinitionHash, // lane 1 -- bottom
+        kGoodDoggoDefinitionHash,      // lane 2 -- left
+        kSelfieDefinitionHash,              // lane 3 -- right
     };
 
 /**
