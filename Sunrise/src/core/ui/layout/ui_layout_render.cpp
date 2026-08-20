@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <array>
 #include <imgui.h>
+#include <string>
 #include <string_view>
 
 #include "../../../../resources/resource.h"
@@ -33,10 +34,18 @@ constexpr float kNavigationWidth = 180.0F;
 constexpr float kAutomaticWidth = 0.0F;
 /** A half-axis pivot centers the window on both viewport axes. */
 constexpr ImVec2 kCenterPivot{0.5F, 0.5F};
-/** The main surface is fixed, has no title bar, and is left out of saved Dear ImGui state. */
+
+/**
+ * The main surface is draggable but does not use Dear ImGui's saved settings.
+ *
+ * Position is kept only for the current game session. This means every fresh
+ * game launch starts with the menu centered, while closing and reopening the
+ * menu during that same session keeps the position where the user dragged it.
+ */
 constexpr ImGuiWindowFlags kMainWindowFlags =
     ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings
     | ImGuiWindowFlags_NoTitleBar;
+
 /** One trailing null byte turns a descriptor name into a component label. */
 constexpr std::size_t kLabelTerminatorBytes = 1;
 /** Fixed animation key. Every visibility-lane user needs its own, so keep these distinct. */
@@ -59,6 +68,15 @@ constexpr float kHalfExtent = 2.0F;
 constexpr char kTitle[] = "SUNRISE";
 
 /**
+ * Session-only menu position.
+ *
+ * This intentionally lives only in memory. It is not written to an ImGui
+ * settings file, so the menu starts centered again on a fresh game launch.
+ */
+ImVec2 g_menuPosition{};
+bool g_menuPositionInitialized = false;
+
+/**
  * Copies one display name into null-terminated component storage.
  * @return Fixed label storage, always with a trailing null.
  */
@@ -79,14 +97,17 @@ component_label(const modules::Descriptor& descriptor) noexcept {
     if (viewport.Size.x <= 0.0F || viewport.Size.y <= 0.0F) {
         return {};
     }
+
     const float margin = scaling::dpi::pixels(kViewportMargin);
     const float availableWidth = viewport.Size.x - (margin * kViewportMarginCount);
     const float availableHeight = viewport.Size.y - (margin * kViewportMarginCount);
     const float minimumWidth = scaling::dpi::pixels(kMinimumWindowWidth);
     const float minimumHeight = scaling::dpi::pixels(kMinimumWindowHeight);
+
     if (availableWidth < minimumWidth || availableHeight < minimumHeight) {
         return {};
     }
+
     return {(std::min)(scaling::dpi::pixels(kPreferredWindowWidth), availableWidth),
             (std::min)(scaling::dpi::pixels(kPreferredWindowHeight), availableHeight)};
 }
@@ -100,10 +121,14 @@ void draw_content(const navigation::Selection& selected) noexcept {
         ImGui::TextDisabled("No modules are registered.");
         return;
     }
+
     const auto displayName = component_label(selected.descriptor);
+
     components::section::header(displayName.data());
+
     // One spacing height below the title row, so a module's first line never sits against it.
     ImGui::Dummy({kAutomaticWidth, ImGui::GetStyle().ItemSpacing.y});
+
     selected.descriptor.frame_callback()();
 }
 
@@ -111,85 +136,143 @@ void draw_content(const navigation::Selection& selected) noexcept {
 void draw_title() noexcept {
     const float extent = scaling::dpi::pixels(kTitleLogoExtent);
     const bool logoDrawn = components::logo::draw(extent);
+
     if (logoDrawn) {
         ImGui::SameLine();
     }
 
     // The size is the authored one, because the style carries the display scale separately.
     ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * kTitleTextRatio);
+
     const float titleHeight = ImGui::GetTextLineHeight();
     const float rowY = ImGui::GetCursorPosY();
+
     // The title is shorter than the logo, so it sits lower to stay level with it.
     const float titleY =
         logoDrawn ? rowY + ((std::max)(extent - titleHeight, 0.0F) / kHalfExtent) : rowY;
+
     ImGui::SetCursorPosY(titleY);
     ImGui::TextUnformatted(kTitle);
+
     ImGui::PopFont();
 
     ImGui::SameLine();
+
     // SameLine returns to the row the logo opened, so the version is placed against the title
     // again, centered on it because it stays at body size.
     ImGui::SetCursorPosY(
         titleY + ((std::max)(titleHeight - ImGui::GetTextLineHeight(), 0.0F) / kHalfExtent));
+
     ImGui::TextDisabled(SUNRISE_VER_STRING);
 }
 
 } // namespace
 
-/** Draws the centered Sunrise surface inside the caller's active Dear ImGui frame. */
+/** Draws the Sunrise surface with session-only draggable positioning. */
 bool render(bool visible) noexcept {
     if (!internal::context_is_current()) {
         return false;
     }
+
     ImGuiViewport* viewport = ImGui::GetMainViewport();
+
     if (viewport == nullptr) {
         return false;
     }
+
     const ImVec2 size = window_size(*viewport);
+
     if (size.x <= 0.0F || size.y <= 0.0F) {
         return false;
     }
+
     // A new lane starts closed, so the surface animates open the first time it is asked for.
     const float progress = animation::transition::update(kSurfaceAnimationId,
                                                          animation::transition::Lane::visibility,
                                                          visible,
                                                          kVisibilityRates,
                                                          kClosedProgress);
+
     if (progress <= kClosedProgress) {
         return false;
     }
 
     const float scale = kOpeningScale + ((kOpenScale - kOpeningScale) * progress);
-    ImGui::SetNextWindowPos(viewport->GetCenter(), ImGuiCond_Always, kCenterPivot);
+
+    /*
+     * First opening of the current session:
+     * center the menu.
+     *
+     * After that, g_menuPosition is retained and used when the menu is
+     * reopened, so closing the menu does not reset its position.
+     */
+    if (!g_menuPositionInitialized) {
+        const ImVec2 scaledSize{size.x * scale, size.y * scale};
+
+        g_menuPosition = {
+            viewport->GetCenter().x - (scaledSize.x * kCenterPivot.x),
+            viewport->GetCenter().y - (scaledSize.y * kCenterPivot.y),
+        };
+
+        g_menuPositionInitialized = true;
+    }
+
+    ImGui::SetNextWindowPos(g_menuPosition, ImGuiCond_Always);
     ImGui::SetNextWindowSize({size.x * scale, size.y * scale}, ImGuiCond_Always);
+
     // One style alpha fades the surface and everything drawn inside it together.
     ImGui::PushStyleVar(ImGuiStyleVar_Alpha, progress);
+
     const bool submitContents = ImGui::Begin("Sunrise", nullptr, kMainWindowFlags);
+
+    /*
+     * The entire window is a drag surface.
+     *
+     * ImGui::IsWindowHovered() means the mouse must be over the Sunrise
+     * window, but it does not create an invisible widget over the controls.
+     * Existing buttons, sliders, checkboxes, etc. therefore continue to work.
+     */
+    if (ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem)
+        && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+        const ImVec2 mouseDelta = ImGui::GetIO().MouseDelta;
+
+        g_menuPosition.x += mouseDelta.x;
+        g_menuPosition.y += mouseDelta.y;
+    }
+
     if (submitContents) {
         draw_title();
         ImGui::Separator();
 
         const StateSnapshot state = snapshot();
         navigation::Selection selected{};
+
         const float panelHeight = ImGui::GetContentRegionAvail().y;
+
         {
             const components::card::Scope navigationCard(
                 "##navigation_card", ImVec2(scaling::dpi::pixels(kNavigationWidth), panelHeight));
+
             if (navigationCard.visible()) {
                 selected = navigation::draw(state);
             }
         }
+
         ImGui::SameLine();
+
         {
             const components::card::Scope contentCard("##content_card",
                                                       ImVec2(kAutomaticWidth, panelHeight));
+
             if (contentCard.visible()) {
                 draw_content(selected);
             }
         }
     }
+
     ImGui::End();
     ImGui::PopStyleVar();
+
     return true;
 }
 
