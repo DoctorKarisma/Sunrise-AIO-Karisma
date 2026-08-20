@@ -670,6 +670,7 @@
     <ClCompile Include="src\server\bap\encrypted\push\snapshot\family4_object_staging.cpp" />
     <ClCompile Include="src\core\settings\state\account_rows_parser.cpp" />
     <ClCompile Include="src\server\bap\encrypted\push\queuez\queuez_banner_push.cpp" />
+	<ClCompile Include="src\server\bap\encrypted\push\queuez\queuez_account_preflight.cpp" />
     <ClCompile Include="src\server\bap\encrypted\push\queuez\queuez_push_reporting.cpp" />
     <ClCompile Include="src\client\content\items\packages\package_container_location.cpp" />
     <ClCompile Include="src\client\content\items\packages\package_build_report.cpp" />
