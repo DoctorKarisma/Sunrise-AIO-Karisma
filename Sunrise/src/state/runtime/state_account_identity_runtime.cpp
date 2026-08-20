@@ -209,3 +209,5 @@ constexpr std::uint64_t kFirstGeneratedItemSoid = 0x4000000000000001ULL;
 
 } // namespace runtime::detail
 } // namespace sunrise::state
+
+#include "character_creation.inl"

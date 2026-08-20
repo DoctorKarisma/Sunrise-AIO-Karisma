@@ -175,6 +175,8 @@ struct CharacterState {
     std::array<std::byte, kCharacterPresentationHeaderSize> presentationHeader{};
     std::array<std::byte, kCharacterCreationHeaderSize> creationHeader{};
     std::array<std::byte, kCharacterCreationTailSize> creationTail{};
+    /** Opaque final five bits of the native opcode-501 creator payload. */
+    std::uint8_t creatorTrailer{};
 };
 
 /** Account identity shared by backend object families. */

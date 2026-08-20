@@ -19,8 +19,8 @@ constexpr std::uint8_t kPrefixWidth = 3;
 constexpr std::size_t kU16Count = 14;
 /** Number of 32-bit descriptor values in the measured request. */
 constexpr std::size_t kU32Count = 17;
-/** Width of the zero padding at the end of the measured request. */
-constexpr std::uint8_t kPaddingWidth = 5;
+/** Width of the opaque trailer at the end of the measured request. */
+constexpr std::uint8_t kTrailerWidth = 5;
 
 /** Fixed identity bits shared by the measured Human/Awoken/Exo creator requests. */
 constexpr std::uint16_t kIdentityFixedBits = 0x0301U;
@@ -36,7 +36,7 @@ constexpr std::uint8_t kObservedPrefix = 6;
 constexpr std::uint16_t kSignedU16Bias = 0x8000U;
 constexpr std::uint8_t kSignedU8Bias = 0x80U;
 
-static_assert(kPrefixWidth + kU16Count * 16 + kU32Count * 32 + kPaddingWidth
+static_assert(kPrefixWidth + kU16Count * 16 + kU32Count * 32 + kTrailerWidth
               == kRequestWireSize * 8);
 
 /** Mechanical split of the verified 97-byte request. */
@@ -44,7 +44,7 @@ struct Layout {
     std::uint8_t prefix{};
     std::array<std::uint16_t, kU16Count> fields16{};
     std::array<std::uint32_t, kU32Count> fields32{};
-    std::uint8_t padding{};
+    std::uint8_t trailer{};
 };
 
 void write_u16_le(std::span<std::byte, 2> output, std::uint16_t value) noexcept {
@@ -93,10 +93,10 @@ void write_u32_le(std::span<std::byte, 4> output, std::uint32_t value) noexcept 
         }
         field = static_cast<std::uint32_t>(value);
     }
-    if (!reader.read(kPaddingWidth, value)) {
+    if (!reader.read(kTrailerWidth, value)) {
         return false;
     }
-    layout.padding = static_cast<std::uint8_t>(value);
+    layout.trailer = static_cast<std::uint8_t>(value);
     return reader.remaining_bits() == 0;
 }
 
@@ -113,8 +113,7 @@ bool decode_request(const Message& message, DecodedRequest& request) noexcept {
     }
 
     Layout layout{};
-    if (!parse_layout(message.payload, layout) || layout.prefix != kObservedPrefix
-        || layout.padding != 0) {
+    if (!parse_layout(message.payload, layout) || layout.prefix != kObservedPrefix) {
         return false;
     }
 
@@ -137,6 +136,7 @@ bool decode_request(const Message& message, DecodedRequest& request) noexcept {
         return false;
     }
     request.characterClass = static_cast<std::uint8_t>(classHigh - 0x80U);
+    request.creatorTrailer = layout.trailer;
 
     // Four compact descriptor values occupy two 16-bit fields. The native presentation record
     // widens them to 16 bits and places the fourth after the ten signed descriptor lanes.

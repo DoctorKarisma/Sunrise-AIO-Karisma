@@ -186,14 +186,15 @@ void report_character_create_decode(
             ? std::snprintf(line.data(),
                             line.size(),
                             "ev=ws501 stage=decode result=ok bytes=%zu race=%u gender=%u class=%u "
-                            "presentation=%zu creation=%zu tail=%zu",
+                            "presentation=%zu creation=%zu tail=%zu trailer=%u",
                             payloadSize,
                             static_cast<unsigned>(decoded->race),
                             static_cast<unsigned>(decoded->gender),
                             static_cast<unsigned>(decoded->characterClass),
                             decoded->presentationHeader.size(),
                             decoded->creationHeader.size(),
-                            decoded->creationTail.size())
+                            decoded->creationTail.size(),
+                            static_cast<unsigned>(decoded->creatorTrailer))
             : std::snprintf(line.data(),
                             line.size(),
                             "ev=ws501 stage=decode result=fail bytes=%zu",
@@ -278,8 +279,8 @@ bool consume(std::span<const std::byte> request,
             middleware::web_service::messages::opcode501::decode_request(message, decoded);
         report_character_create_decode(decodedOk ? &decoded : nullptr, message.payload.size());
 
-        // Creation remains non-mutating here. The transaction layer can consume this verified
-        // request once character creation and its Queuez publication are staged atomically.
+        // The generic direct path remains non-mutating. The authenticated BAP route intercepts
+        // opcode 501 before this handler and owns the atomic State/Queuez creation transaction.
         const std::uint64_t characterSoid =
             state::account::selected_character_soid(state::account_snapshot());
         return middleware::web_service::messages::opcode501::encode_response(

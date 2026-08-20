@@ -32,6 +32,8 @@ struct DecodedRequest {
     std::array<std::byte, kPresentationHeaderSize> presentationHeader{};
     std::array<std::byte, kCreationHeaderSize> creationHeader{};
     std::array<std::byte, kCreationTailSize> creationTail{};
+    /** Opaque final five bits retained exactly; semantics are not yet assigned. */
+    std::uint8_t creatorTrailer{};
 };
 
 /**
