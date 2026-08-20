@@ -145,6 +145,7 @@ bool consume(Session& session,
     const bool mutatesAccount =
         outcome.hasChangeCharacter || outcome.hasSelectCharacter
         || transaction_if<CharacterCreationTransaction>(outcome) != nullptr
+        || transaction_if<CharacterDeletionTransaction>(outcome) != nullptr
         || transaction_if<EquipmentSwapTransaction>(outcome) != nullptr
         || transaction_if<SocketPlugTransaction>(outcome) != nullptr
         || transaction_if<ItemStateTransaction>(outcome) != nullptr
@@ -155,6 +156,9 @@ bool consume(Session& session,
     const auto* stagedCreation = transaction_if<CharacterCreationTransaction>(outcome);
     const std::uint64_t createdCharacterSoid =
         stagedCreation == nullptr ? 0 : stagedCreation->pending.characterSoid;
+    const auto* stagedDeletion = transaction_if<CharacterDeletionTransaction>(outcome);
+    const std::uint64_t deletedCharacterSoid =
+        stagedDeletion == nullptr ? 0 : stagedDeletion->pending.characterSoid;
     const auto* stagedSocket = transaction_if<SocketPlugTransaction>(outcome);
     const std::uint8_t socketLane = stagedSocket == nullptr ? 0 : stagedSocket->pending.socketLane;
     const std::uint16_t socketPlugDefinition =
@@ -211,6 +215,26 @@ bool consume(Session& session,
                     session.queuez.family0Version,
                     session.queuez.family3Version,
                     static_cast<unsigned long long>(createdCharacterSoid));
+                if (count > 0) {
+                    core::log::write(core::log::Channel::server,
+                                     core::log::Level::info,
+                                     {line.data(), static_cast<std::size_t>(count)});
+                }
+            }
+            if (deletedCharacterSoid != 0) {
+                std::array<char, core::log::kLineCapacity> line{};
+                const int count = std::snprintf(
+                    line.data(),
+                    line.size(),
+                    "ev=character_delete stage=output_publish result=ok framed_bytes=%zu "
+                    "queuez_published=%u family_version=%d family0_version=%d family3_version=%d "
+                    "character=0x%llX",
+                    framedSize,
+                    static_cast<unsigned>(publishesQueuez),
+                    session.queuez.family4Version,
+                    session.queuez.family0Version,
+                    session.queuez.family3Version,
+                    static_cast<unsigned long long>(deletedCharacterSoid));
                 if (count > 0) {
                     core::log::write(core::log::Channel::server,
                                      core::log::Level::info,

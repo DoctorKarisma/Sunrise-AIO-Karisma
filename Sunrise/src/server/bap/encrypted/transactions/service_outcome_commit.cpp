@@ -8,6 +8,7 @@
 #include "../../../../state/activity/runtime.h"
 #include "../../../../state/matchmaking/matchmaking_state.h"
 #include "../../../../state/runtime/character_creation.h"
+#include "../../../../state/runtime/character_deletion.h"
 #include "../../../../state/runtime/runtime.h"
 #include "../bap_connection_publication.h"
 #include "../internal.h"
@@ -166,6 +167,14 @@ bool commit(ServiceOutcome& outcome, Publication& publication) noexcept {
                          committed ? core::log::Level::debug : core::log::Level::warn,
                          committed ? "ev=character_create stage=transaction_commit result=ok"
                                    : "ev=character_create stage=transaction_commit result=fail");
+        return committed;
+    }
+    if (auto* transaction = transaction_if<CharacterDeletionTransaction>(outcome)) {
+        const bool committed = state::commit_character_deletion(transaction->pending);
+        core::log::write(core::log::Channel::server,
+                         committed ? core::log::Level::debug : core::log::Level::warn,
+                         committed ? "ev=character_delete stage=transaction_commit result=ok"
+                                   : "ev=character_delete stage=transaction_commit result=fail");
         return committed;
     }
     if (auto* transaction = transaction_if<EquipmentSwapTransaction>(outcome)) {

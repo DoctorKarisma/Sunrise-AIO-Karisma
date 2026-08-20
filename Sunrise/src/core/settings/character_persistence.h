@@ -538,6 +538,187 @@ subclass_item(const state::CharacterState& character) noexcept {
     return true;
 }
 
+/** Removes one dense state.characters element while preserving every surviving object verbatim. */
+[[nodiscard]] inline bool rewrite_character_removal(std::string_view document,
+                                                     std::size_t removeIndex,
+                                                     std::span<char> storage,
+                                                     std::size_t& written) noexcept {
+    written = 0;
+    const std::size_t rootBegin = skip_whitespace(document, 0);
+    std::size_t rootEnd = 0;
+    if (rootBegin >= document.size() || document[rootBegin] != '{'
+        || !scan_value(document, rootBegin, rootEnd)) {
+        return false;
+    }
+
+    MemberSpan stateMember{};
+    if (!find_object_member(document, rootBegin, rootEnd, "state", stateMember)
+        || !stateMember.found || document[stateMember.valueBegin] != '{') {
+        return false;
+    }
+    MemberSpan charactersMember{};
+    if (!find_object_member(document,
+                            stateMember.valueBegin,
+                            stateMember.valueEnd,
+                            "characters",
+                            charactersMember)
+        || !charactersMember.found || charactersMember.valueBegin >= charactersMember.valueEnd
+        || document[charactersMember.valueBegin] != '['
+        || document[charactersMember.valueEnd - 1U] != ']') {
+        return false;
+    }
+
+    struct ElementSpan {
+        std::size_t begin{};
+        std::size_t end{};
+    };
+    std::array<ElementSpan, state::kCharacterCapacity> elements{};
+    std::size_t elementCount = 0;
+    const std::size_t close = charactersMember.valueEnd - 1U;
+    std::size_t position = skip_whitespace(document, charactersMember.valueBegin + 1U);
+    while (position < close) {
+        if (elementCount >= elements.size()) {
+            return false;
+        }
+        const std::size_t begin = position;
+        std::size_t end = 0;
+        if (!scan_value(document, begin, end) || end > close) {
+            return false;
+        }
+        elements[elementCount++] = ElementSpan{begin, end};
+        position = skip_whitespace(document, end);
+        if (position == close) {
+            break;
+        }
+        if (position > close || document[position] != ',') {
+            return false;
+        }
+        position = skip_whitespace(document, position + 1U);
+    }
+    if (removeIndex >= elementCount) {
+        return false;
+    }
+
+    Writer writer(storage);
+    if (!writer.append(document.substr(0, charactersMember.valueBegin + 1U))) {
+        return false;
+    }
+    bool wrote = false;
+    for (std::size_t index = 0; index < elementCount; ++index) {
+        if (index == removeIndex) {
+            continue;
+        }
+        if (!writer.append(wrote ? ",\n      " : "\n      ")
+            || !writer.append(document.substr(elements[index].begin,
+                                              elements[index].end - elements[index].begin))) {
+            return false;
+        }
+        wrote = true;
+    }
+    if (!writer.append("\n    ") || !writer.append(document.substr(close)) || !writer.ok()) {
+        return false;
+    }
+    written = writer.size();
+    return true;
+}
+
+
+/** Compares two characters only through the fields persisted in settings.json. */
+[[nodiscard]] inline bool same_persisted_character(const state::CharacterState& left,
+                                                   const state::CharacterState& right) noexcept {
+    std::array<char, 32768> leftStorage{};
+    std::array<char, 32768> rightStorage{};
+    std::size_t leftSize = 0;
+    std::size_t rightSize = 0;
+    return serialize_character(left, leftStorage, leftSize)
+           && serialize_character(right, rightStorage, rightSize) && leftSize == rightSize
+           && std::string_view(leftStorage.data(), leftSize)
+                  == std::string_view(rightStorage.data(), rightSize);
+}
+
+/** Compares the dense authored character roster, ignoring runtime-only selection state. */
+[[nodiscard]] inline bool same_persisted_roster(const state::AccountState& left,
+                                                const state::AccountState& right) noexcept {
+    if (left.characterCount != right.characterCount
+        || left.characterCount > left.characters.size()
+        || right.characterCount > right.characters.size()) {
+        return false;
+    }
+    for (std::size_t index = 0; index < left.characterCount; ++index) {
+        if (!same_persisted_character(left.characters[index], right.characters[index])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/** Replaces state.characters with one canonical runtime roster. */
+[[nodiscard]] inline bool rewrite_character_roster(std::string_view document,
+                                                   const state::AccountState& account,
+                                                   std::span<char> storage,
+                                                   std::size_t& written) noexcept {
+    written = 0;
+    if (account.characterCount > account.characters.size()) {
+        return false;
+    }
+
+    const std::size_t rootBegin = skip_whitespace(document, 0);
+    std::size_t rootEnd = 0;
+    if (rootBegin >= document.size() || document[rootBegin] != '{'
+        || !scan_value(document, rootBegin, rootEnd)) {
+        return false;
+    }
+
+    MemberSpan stateMember{};
+    if (!find_object_member(document, rootBegin, rootEnd, "state", stateMember)
+        || !stateMember.found || document[stateMember.valueBegin] != '{') {
+        return false;
+    }
+    MemberSpan charactersMember{};
+    if (!find_object_member(document,
+                            stateMember.valueBegin,
+                            stateMember.valueEnd,
+                            "characters",
+                            charactersMember)
+        || !charactersMember.found || charactersMember.valueBegin >= charactersMember.valueEnd
+        || document[charactersMember.valueBegin] != '['
+        || document[charactersMember.valueEnd - 1U] != ']') {
+        return false;
+    }
+
+    Writer writer(storage);
+    if (!writer.append(document.substr(0, charactersMember.valueBegin))
+        || !writer.append("[")) {
+        return false;
+    }
+    std::array<char, 32768> serializedBuffer{};
+    for (std::size_t index = 0; index < account.characterCount; ++index) {
+        std::size_t serializedSize = 0;
+        if (!serialize_character(account.characters[index], serializedBuffer, serializedSize)
+            || !writer.append(index == 0 ? "\n" : ",\n")
+            || !writer.append({serializedBuffer.data(), serializedSize})) {
+            return false;
+        }
+    }
+    if (account.characterCount != 0 && !writer.append("\n    ")) {
+        return false;
+    }
+    if (!writer.append("]") || !writer.append(document.substr(charactersMember.valueEnd))
+        || !writer.ok()) {
+        return false;
+    }
+    written = writer.size();
+    return true;
+}
+
+/** Validates that a rewritten settings document persists exactly one canonical runtime roster. */
+[[nodiscard]] inline bool validate_character_roster(std::string_view document,
+                                                    const state::AccountState& expected,
+                                                    Settings& parsed) noexcept {
+    return parse(document, parsed)
+           && same_persisted_roster(parsed.initialAccount, expected);
+}
+
 [[nodiscard]] inline bool read_settings(const path::Buffer& filePath,
                                         std::span<char> storage,
                                         std::size_t& readSize) noexcept {
@@ -628,20 +809,57 @@ inline void report_store(std::string_view result,
     }
 }
 
+inline void report_remove(std::string_view result,
+                          std::string_view reason,
+                          std::uint64_t soid,
+                          std::size_t count) noexcept {
+    std::array<char, log::kLineCapacity> line{};
+    const int length = std::snprintf(line.data(),
+                                     line.size(),
+                                     "ev=character_persistence stage=remove result=%.*s reason=%.*s "
+                                     "mode=characters soid=0x%016llX count=%zu",
+                                     static_cast<int>(result.size()),
+                                     result.data(),
+                                     static_cast<int>(reason.size()),
+                                     reason.data(),
+                                     static_cast<unsigned long long>(soid),
+                                     count);
+    if (length > 0) {
+        log::write(log::Channel::state,
+                   result == "ok" ? log::Level::info : log::Level::warn,
+                   {line.data(), static_cast<std::size_t>(length)});
+    }
+}
+
 } // namespace detail
 
 /**
- * Atomically appends one successfully committed opcode-501 character to state.characters.
- * The whole initial authored character row is stored. Later equipment mutations intentionally do
- * not rewrite settings yet; this hook is only the character-creation persistence boundary.
+ * Persists one opcode-501 after-image against the exact runtime roster that produced it.
+ *
+ * Normal operation appends only the new authored row and preserves every existing row verbatim.
+ * If settings.json drifted from runtime State, the whole characters array is rebuilt from the
+ * canonical runtime after-image instead of rejecting a stale duplicate SOID.
  */
-[[nodiscard]] inline bool store_character(const state::CharacterState& character) noexcept {
+[[nodiscard]] inline bool store_character(const state::AccountState& before,
+                                          const state::AccountState& after,
+                                          std::uint64_t characterSoid) noexcept {
     AcquireSRWLockExclusive(&detail::g_storeLock);
 
     bool stored = false;
     std::string_view reason = "unknown";
     std::size_t finalCount = 0;
     do {
+        if (before.primarySoid == 0 || after.primarySoid != before.primarySoid
+            || before.characterCount >= before.characters.size()
+            || after.characterCount != before.characterCount + 1U
+            || after.characterCount > after.characters.size()
+            || before.characterCount >= after.characterCount
+            || after.characters[before.characterCount].soid != characterSoid
+            || characterSoid == 0) {
+            reason = "identity";
+            break;
+        }
+
         path::Buffer filePath{};
         if (!detail::settings_path(filePath)) {
             reason = "path";
@@ -666,55 +884,47 @@ inline void report_store(std::string_view result,
             reason = "parse";
             break;
         }
-        if (current.initialAccount.characterCount >= state::kCharacterCapacity) {
-            reason = "full";
-            break;
-        }
-        for (std::size_t index = 0; index < current.initialAccount.characterCount; ++index) {
-            if (current.initialAccount.characters[index].soid == character.soid) {
-                reason = "duplicate";
-                break;
-            }
-        }
-        if (reason == "duplicate") {
-            break;
-        }
 
-        std::array<char, 32768> serializedBuffer{};
-        std::size_t serializedSize = 0;
-        if (!detail::serialize_character(character, serializedBuffer, serializedSize)) {
-            reason = "serialize";
+        // A prior disk write may already have landed even if runtime State did not advance.
+        if (detail::same_persisted_roster(current.initialAccount, after)) {
+            finalCount = after.characterCount;
+            reason = "already";
+            stored = true;
             break;
         }
 
         static std::array<char, detail::kRewriteCapacity> rewriteBuffer{};
         std::size_t rewriteSize = 0;
-        if (!detail::rewrite_characters(document,
-                                        {serializedBuffer.data(), serializedSize},
-                                        rewriteBuffer,
-                                        rewriteSize)) {
-            reason = "rewrite";
-            break;
+        if (detail::same_persisted_roster(current.initialAccount, before)) {
+            std::array<char, 32768> serializedBuffer{};
+            std::size_t serializedSize = 0;
+            if (!detail::serialize_character(
+                    after.characters[before.characterCount], serializedBuffer, serializedSize)) {
+                reason = "serialize";
+                break;
+            }
+            if (!detail::rewrite_characters(document,
+                                            {serializedBuffer.data(), serializedSize},
+                                            rewriteBuffer,
+                                            rewriteSize)) {
+                reason = "rewrite";
+                break;
+            }
+            reason = "ok";
+        } else {
+            // Disk and State disagree. State is authoritative for this transaction, so repair the
+            // authored roster in the same atomic write that persists the new character.
+            if (!detail::rewrite_character_roster(
+                    document, after, rewriteBuffer, rewriteSize)) {
+                reason = "rewrite";
+                break;
+            }
+            reason = "reconcile";
         }
 
         const std::string_view rewritten(rewriteBuffer.data(), rewriteSize);
         static Settings validation{};
-        if (!parse(rewritten, validation)
-            || validation.initialAccount.characterCount != current.initialAccount.characterCount + 1U
-            || validation.initialAccount.characters[validation.initialAccount.characterCount - 1U].soid
-                   != character.soid
-            || validation.initialAccount.characters[validation.initialAccount.characterCount - 1U]
-                   .presentationHeader
-                   != character.presentationHeader
-            || validation.initialAccount.characters[validation.initialAccount.characterCount - 1U]
-                   .creationHeader
-                   != character.creationHeader
-            || validation.initialAccount.characters[validation.initialAccount.characterCount - 1U]
-                   .creationTail
-                   != character.creationTail
-            || validation.initialAccount.characters[validation.initialAccount.characterCount - 1U]
-                   .creatorTrailer
-                   != character.creatorTrailer) {
+        if (!detail::validate_character_roster(rewritten, after, validation)) {
             reason = "validate";
             break;
         }
@@ -723,13 +933,108 @@ inline void report_store(std::string_view result,
             reason = "write";
             break;
         }
-        reason = "ok";
         stored = true;
     } while (false);
 
     ReleaseSRWLockExclusive(&detail::g_storeLock);
-    detail::report_store(stored ? "ok" : "fail", reason, character.soid, finalCount);
+    detail::report_store(stored ? "ok" : "fail", reason, characterSoid, finalCount);
     return stored;
+}
+
+/**
+ * Persists one opcode-502 after-image against the exact runtime roster that produced it.
+ *
+ * Normal operation removes the dense authored row while preserving survivors verbatim. A drifted
+ * settings.json is repaired from the runtime after-image rather than deleting an unrelated row.
+ */
+[[nodiscard]] inline bool remove_character(const state::AccountState& before,
+                                           const state::AccountState& after,
+                                           std::uint64_t characterSoid,
+                                           std::size_t expectedIndex) noexcept {
+    AcquireSRWLockExclusive(&detail::g_storeLock);
+
+    bool removed = false;
+    std::string_view reason = "unknown";
+    std::size_t finalCount = 0;
+    do {
+        if (before.primarySoid == 0 || after.primarySoid != before.primarySoid
+            || characterSoid == 0 || before.characterCount == 0
+            || before.characterCount != after.characterCount + 1U
+            || expectedIndex >= before.characterCount
+            || before.characters[expectedIndex].soid != characterSoid) {
+            reason = "identity";
+            break;
+        }
+
+        path::Buffer filePath{};
+        if (!detail::settings_path(filePath)) {
+            reason = "path";
+            break;
+        }
+
+        static std::array<char, detail::kSettingsCapacity> readBuffer{};
+        std::size_t readSize = 0;
+        if (!detail::read_settings(filePath, readBuffer, readSize)) {
+            reason = "read";
+            break;
+        }
+        std::string_view document(readBuffer.data(), readSize);
+        if (document.size() >= 3 && static_cast<unsigned char>(document[0]) == 0xEFU
+            && static_cast<unsigned char>(document[1]) == 0xBBU
+            && static_cast<unsigned char>(document[2]) == 0xBFU) {
+            document.remove_prefix(3);
+        }
+
+        static Settings current{};
+        if (!parse(document, current)) {
+            reason = "parse";
+            break;
+        }
+
+        // A retry after the atomic disk write is already on the desired side of the deletion.
+        if (detail::same_persisted_roster(current.initialAccount, after)) {
+            finalCount = after.characterCount;
+            reason = "already";
+            removed = true;
+            break;
+        }
+
+        static std::array<char, detail::kRewriteCapacity> rewriteBuffer{};
+        std::size_t rewriteSize = 0;
+        if (detail::same_persisted_roster(current.initialAccount, before)) {
+            if (!detail::rewrite_character_removal(
+                    document, expectedIndex, rewriteBuffer, rewriteSize)) {
+                reason = "rewrite";
+                break;
+            }
+            reason = "ok";
+        } else {
+            // Never choose a row by stale disk SOID/index. Repair to the exact runtime after-image.
+            if (!detail::rewrite_character_roster(
+                    document, after, rewriteBuffer, rewriteSize)) {
+                reason = "rewrite";
+                break;
+            }
+            reason = "reconcile";
+        }
+
+        const std::string_view rewritten(rewriteBuffer.data(), rewriteSize);
+        static Settings validation{};
+        if (!detail::validate_character_roster(rewritten, after, validation)) {
+            reason = "validate";
+            break;
+        }
+        finalCount = validation.initialAccount.characterCount;
+        if (!detail::store_settings(filePath, rewritten)) {
+            reason = "write";
+            break;
+        }
+        removed = true;
+    } while (false);
+
+    ReleaseSRWLockExclusive(&detail::g_storeLock);
+    detail::report_remove(removed ? "ok" : "fail", reason, characterSoid, finalCount);
+    return removed;
 }
 
 } // namespace sunrise::core::settings::persistence

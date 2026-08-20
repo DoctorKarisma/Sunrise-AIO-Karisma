@@ -12,8 +12,10 @@
 #include "../../../../middleware/bap/user_message/user_message_response.h"
 #include "../../../../middleware/encoding/byte_order.h"
 #include "../../../../middleware/web_service/messages/opcode501_codec.h"
+#include "../../../../middleware/web_service/messages/opcode502.h"
 #include "../../../../middleware/web_service/messages/opcode505/opcode505_codec.h"
 #include "../../../../state/runtime/character_creation.h"
+#include "../../../../state/runtime/character_deletion.h"
 #include "../../../../state/runtime/runtime.h"
 #include "../../../web_service/web_service_runtime.h"
 #include "../activity_host_manager/activity_host_manager_route.h"
@@ -208,6 +210,51 @@ bool process(const ServiceRoute& route,
             }
             auto& transaction = outcome.transaction.emplace<CharacterCreationTransaction>();
             transaction.pending = mutation;
+            return true;
+        }
+        if (parsedMessage
+            && message.opcode == middleware::web_service::messages::opcode502::kOpcode) {
+            middleware::web_service::messages::opcode502::Request request{};
+            state::PendingCharacterDeletion mutation{};
+            state::CharacterDeletionResult result = state::CharacterDeletionResult::invalid;
+            if (middleware::web_service::messages::opcode502::parse_request(message, request)) {
+                result = state::prepare_character_deletion(request.characterSoid, mutation);
+            }
+
+            const bool prepared = result == state::CharacterDeletionResult::ok;
+            std::array<char, core::log::kLineCapacity> line{};
+            const int count = std::snprintf(
+                line.data(),
+                line.size(),
+                "ev=character_delete stage=prepare result=%s reason=%s tx=%u payload=%zu "
+                "soid=0x%llX before=%zu index=%zu",
+                prepared ? "ok" : "fail",
+                state::character_deletion_result_name(result),
+                message.transactionId,
+                message.payload.size(),
+                static_cast<unsigned long long>(request.characterSoid),
+                mutation.beforeCharacterCount,
+                mutation.characterIndex);
+            if (count > 0) {
+                core::log::write(core::log::Channel::server,
+                                 prepared ? core::log::Level::info : core::log::Level::warn,
+                                 {line.data(), static_cast<std::size_t>(count)});
+            }
+
+            middleware::web_service::StatusResponse status{};
+            status.code = prepared ? 0 : 1;
+            if (!middleware::web_service::encode_response(
+                    message,
+                    middleware::web_service::ResponseShape::statusPair,
+                    status,
+                    output,
+                    written)) {
+                return false;
+            }
+            if (prepared) {
+                auto& transaction = outcome.transaction.emplace<CharacterDeletionTransaction>();
+                transaction.pending = mutation;
+            }
             return true;
         }
         if (parsedMessage

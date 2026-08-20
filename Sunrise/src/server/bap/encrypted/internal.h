@@ -11,6 +11,7 @@
 #include "../../../middleware/bap/frame.h"
 #include "../../../middleware/queuez/subscription.h"
 #include "../../../state/runtime/character_creation.h"
+#include "../../../state/runtime/character_deletion.h"
 #include "../../web_service/web_service_runtime.h"
 #include "../internal.h"
 #include "activity_message/definition.h"
@@ -38,6 +39,11 @@ enum class BodyCodec : std::uint8_t {
 /** Native character creation retained until its roster/account publication succeeds. */
 struct CharacterCreationTransaction {
     state::PendingCharacterCreation pending{};
+};
+
+/** Character deletion retained until its response has been staged and persistence can commit. */
+struct CharacterDeletionTransaction {
+    state::PendingCharacterDeletion pending{};
 };
 
 /** Equipment mutation and the exact QueueZ after-image promised by its response. */
@@ -98,6 +104,7 @@ struct ServiceOutcome {
                                      activity_message::ActivityPlan,
                                      state::matchmaking::PendingMutation,
                                      CharacterCreationTransaction,
+                                     CharacterDeletionTransaction,
                                      EquipmentSwapTransaction,
                                      SubclassSelectionTransaction,
                                      SocketPlugTransaction,

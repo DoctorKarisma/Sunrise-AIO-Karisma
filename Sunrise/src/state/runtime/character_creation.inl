@@ -254,20 +254,23 @@ bool commit_character_creation(PendingCharacterCreation& mutation) noexcept {
     AcquireSRWLockExclusive(&runtime::storage::g_stateLock);
     PendingCharacterCreation canonical{};
     AccountState after{};
-    const CharacterCreationResult result = stage_character_creation(
-        runtime::storage::g_state.account, prepared.creation, canonical, after);
-    const bool committed = result == CharacterCreationResult::ok
-                           && same_pending_creation(canonical, prepared) && account::valid(after);
+    const AccountState before = runtime::storage::g_state.account;
+    const CharacterCreationResult result =
+        stage_character_creation(before, prepared.creation, canonical, after);
+    bool committed = result == CharacterCreationResult::ok
+                     && same_pending_creation(canonical, prepared) && account::valid(after);
+
+    // Disk and runtime State cross the same boundary. Persistence also reconciles an older stale
+    // authored roster against this exact before/after pair, so a duplicate row can never create a
+    // character that exists only until restart.
+    if (committed) {
+        committed = core::settings::persistence::store_character(
+            before, after, prepared.characterSoid);
+    }
     if (committed) {
         runtime::storage::g_state.account = after;
     }
     ReleaseSRWLockExclusive(&runtime::storage::g_stateLock);
-
-    // Persistence is deliberately outside the State lock and after the authoritative commit.
-    // A filesystem failure must not roll back a character the Client has already been told exists.
-    if (committed) {
-        (void)core::settings::persistence::store_character(prepared.createdCharacter);
-    }
     return committed;
 }
 

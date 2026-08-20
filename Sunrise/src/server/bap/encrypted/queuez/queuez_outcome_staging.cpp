@@ -1,9 +1,13 @@
 #include "queuez_outcome_staging.h"
 
+#include <array>
+#include <cstdio>
 #include <limits>
 
 #include "../../../../core/logging/log.h"
 #include "../../../../middleware/secure_channel/runtime.h"
+#include "../push/queuez/queuez_update_frame.h"
+#include "../push/snapshot/snapshot.h"
 #include "character_creation_publication.h"
 #include "queuez_state_validation.h"
 
@@ -50,6 +54,7 @@ bool stage_service_outcome(Scratch& scratch,
     std::uint64_t socialRosterRoot = 0;
     bool armsAbilityRefresh = false;
     const auto* characterCreation = transaction_if<CharacterCreationTransaction>(outcome);
+    const auto* characterDeletion = transaction_if<CharacterDeletionTransaction>(outcome);
     const auto* equipment = transaction_if<EquipmentSwapTransaction>(outcome);
     const auto* subclassSelection = transaction_if<SubclassSelectionTransaction>(outcome);
     const auto* itemState = transaction_if<ItemStateTransaction>(outcome);
@@ -108,6 +113,74 @@ bool stage_service_outcome(Scratch& scratch,
                              core::log::Level::warn,
                              "ev=queuez stage=character_create result=fail");
             return false;
+        }
+    } else if (characterDeletion != nullptr) {
+        state::AccountState accountAfter{};
+        if (!state::preview_character_deletion(characterDeletion->pending, accountAfter)) {
+            core::log::write(core::log::Channel::server,
+                             core::log::Level::warn,
+                             "ev=queuez stage=character_delete result=fail reason=preview");
+            return false;
+        }
+        // Deletion can be accepted before Family 4 is subscribed. In the normal character-select
+        // path it is already active, and a next-version full refresh immediately releases the
+        // deleted character's item residents and republishes the account's new character count.
+        if (!before.family4Active) {
+            return true;
+        }
+        if (before.family4RootSoid != characterDeletion->pending.accountSoid
+            || before.family4Version == (std::numeric_limits<std::int32_t>::max)()) {
+            core::log::write(core::log::Channel::server,
+                             core::log::Level::warn,
+                             "ev=queuez stage=character_delete result=fail reason=family4_state");
+            return false;
+        }
+
+        push::snapshot::Prepared prepared{};
+        if (!push::snapshot::prepare_family4_refresh_from_account(
+                scratch,
+                before.family4RootSoid,
+                before.family4Version + 1,
+                accountAfter,
+                prepared)
+            || !stage_family4_refresh(before, prepared.family, after)) {
+            core::log::write(core::log::Channel::server,
+                             core::log::Level::warn,
+                             "ev=queuez stage=character_delete result=fail reason=prepare");
+            return false;
+        }
+
+        const std::size_t objectCount = prepared.family.objects.size();
+        const std::size_t beforeBytes = written;
+        if (!push::queuez_frame::append(scratch,
+                                        prepared.family,
+                                        prepared.rawClearSize,
+                                        prepared.compressedClearSize,
+                                        key,
+                                        nonce,
+                                        response,
+                                        written)) {
+            core::log::write(core::log::Channel::server,
+                             core::log::Level::warn,
+                             "ev=queuez stage=character_delete result=fail reason=frame");
+            return false;
+        }
+        middleware::secure_channel::advance_nonce(nonce);
+
+        std::array<char, core::log::kLineCapacity> line{};
+        const int count = std::snprintf(
+            line.data(),
+            line.size(),
+            "ev=queuez stage=character_delete result=ok family=4 objects=%zu bytes=%zu "
+            "version=%d residents=%u",
+            objectCount,
+            written - beforeBytes,
+            after.family4Version,
+            static_cast<unsigned>(after.family4ResidentCount));
+        if (count > 0) {
+            core::log::write(core::log::Channel::server,
+                             core::log::Level::info,
+                             {line.data(), static_cast<std::size_t>(count)});
         }
     } else if (equipment != nullptr) {
         const EquipmentSwap& swap = equipment->update;

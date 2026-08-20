@@ -428,8 +428,25 @@ inline void report_step(const char* stage,
     bool incremental = false;
     if (selected == 0 || !before.family0Active
         || !stage_family0_subscription(before, selected, publish, incremental, after)
-        || !publish || before.family4RootSoid != account.primarySoid) {
+        || before.family4RootSoid != account.primarySoid) {
         return false;
+    }
+
+    // Deletion can free a character SOID that creation immediately reuses. Family zero may still
+    // own that key even though its resident body belongs to the deleted Guardian. Mirror the
+    // ordinary character-pick path: selecting the same key republishes it in place at the next
+    // Family-0 version instead of treating the no-move result as a failure.
+    if (!publish) {
+        if (before.family0Character != selected
+            || before.family0Version == (std::numeric_limits<std::int32_t>::max)()) {
+            return false;
+        }
+        incremental = false;
+        after = before;
+        ++after.family0Version;
+        if (!valid(after)) {
+            return false;
+        }
     }
 
     std::size_t characterIndex = account.characterCount;
