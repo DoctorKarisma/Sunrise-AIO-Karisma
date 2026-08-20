@@ -35,6 +35,18 @@ SRWLOCK g_refreshLock{SRWLOCK_INIT};
            && state::build_data::investment_constants_ready();
 }
 
+/**
+ * Runs the emote-collection canonicalization on the extraction path, where it is an opportunistic
+ * head start rather than a precondition: the snapshot path runs the same step behind its own
+ * preflight, so nothing here is the last chance to apply it.
+ * @return False only when the account itself could not be updated, which is the one outcome that
+ * says something is wrong rather than merely unfinished. A build that cannot carry the item, and
+ * one whose data is still being extracted, both leave the cache worth writing.
+ */
+[[nodiscard]] bool emote_collection_settled() noexcept {
+    return state::ensure_character_emote_collection() != state::EmoteCollectionOutcome::failed;
+}
+
 } // namespace
 
 /** @return True when the next refresh slice needs a visible overlay for a package sweep. */
@@ -49,8 +61,9 @@ bool refresh() noexcept {
         // calls, so a held thread stopped inside one would deadlock the freeze below.
         AcquireSRWLockExclusive(&g_refreshLock);
         const bool persisted = state::ensure_profile_item_identities()
-                               && state::ensure_character_subclasses()
-                               && state::build_data::persist();
+                       && state::ensure_character_subclasses()
+                       && emote_collection_settled()
+                       && state::build_data::persist();
         // Nothing reads a package again until the next boot, so the open files and the held
         // tables go back now rather than at process exit.
         middleware::content::packages::reader::release_caches();
@@ -68,7 +81,9 @@ bool refresh() noexcept {
     (void)items::packages::build();
     const bool domainsReady = ready();
     const bool complete = domainsReady && state::ensure_profile_item_identities()
-                          && state::ensure_character_subclasses() && state::build_data::persist();
+                     && state::ensure_character_subclasses()
+                     && emote_collection_settled()
+                     && state::build_data::persist();
     // The overlay ends with the work, not with the slice, so it spans every retry the pass needs.
     if (complete) {
         core::ui::busy::end(core::ui::busy::Task::contentExtraction);
