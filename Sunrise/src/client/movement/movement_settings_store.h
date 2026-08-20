@@ -9,16 +9,16 @@ inline constexpr float kDefaultDistance = 10.0F;
 /** Smallest offered distance. Zero would leave the key bound to nothing visible. */
 inline constexpr float kMinimumDistance = 1.0F;
 /** Largest offered distance. Past this a press reliably lands through a wall or the floor. */
-inline constexpr float kMaximumDistance = 100.0F;
+inline constexpr float kMaximumDistance = 1000.0F;
 /** No key is bound until one is picked, so a fresh install cannot fire a movement feature. */
 inline constexpr std::uint32_t kNoKey = 0;
 
 /** Default fly speed, in world units per second. */
-inline constexpr float kDefaultFlySpeed = 15.0F;
+inline constexpr float kDefaultFlySpeed = 100.0F;
 /** Slowest offered fly speed. Below this a press does not visibly move the player. */
 inline constexpr float kMinimumFlySpeed = 1.0F;
 /** Fastest offered fly speed. Past this the player outruns what the map streams in. */
-inline constexpr float kMaximumFlySpeed = 100.0F;
+inline constexpr float kMaximumFlySpeed = 500.0F;
 
 /** Runtime movement configuration. This module owns it; Core settings do not carry it. */
 struct Settings {
