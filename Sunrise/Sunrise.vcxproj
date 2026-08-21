@@ -232,6 +232,7 @@
     <ClCompile Include="src\client\hooks\infinite_ammo\infinite_ammo.cpp" />
     <ClCompile Include="src\client\hooks\no_turnback\no_turnback.cpp" />
     <ClCompile Include="src\client\hooks\godmode\godmode.cpp" />
+    <ClCompile Include="src\client\hooks\world_speed\world_speed.cpp" />
     <ClCompile Include="src\client\input\window_focus.cpp" />
     <ClCompile Include="src\client\hooks\teleport\teleport_lifecycle.cpp" />
     <ClCompile Include="src\client\hooks\teleport\teleport_move.cpp" />
@@ -929,6 +930,7 @@
     <ClInclude Include="src\client\hooks\infinite_ammo\infinite_ammo.h" />
     <ClInclude Include="src\client\hooks\no_turnback\no_turnback.h" />
     <ClInclude Include="src\client\hooks\godmode\godmode.h" />
+    <ClInclude Include="src\client\hooks\world_speed\world_speed.h" />
     <ClInclude Include="src\client\input\window_focus.h" />
     <ClInclude Include="src\client\hooks\teleport\internal.h" />
     <ClInclude Include="src\client\hooks\teleport\runtime.h" />

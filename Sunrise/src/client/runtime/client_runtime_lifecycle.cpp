@@ -18,6 +18,7 @@
 #include "../hooks/retail_log/retail_log_lifecycle.h"
 #include "../hooks/spawn/spawn_runtime.h"
 #include "../hooks/teleport/runtime.h"
+#include "../hooks/world_speed/world_speed.h"
 #include "../inactivity/inactivity_settings_store.h"
 #include "../movement/movement_settings_store.h"
 #include "../spawn/spawn_keybind_store.h"
@@ -72,6 +73,7 @@ bool shutdown() noexcept {
     hooks::infinite_ammo::uninstall();
     hooks::godmode::uninstall();
     hooks::no_turnback::uninstall();
+    hooks::world_speed::uninstall();
     hooks::inactivity::uninstall();
     hooks::noclip::uninstall();
     hooks::spawn::uninstall();

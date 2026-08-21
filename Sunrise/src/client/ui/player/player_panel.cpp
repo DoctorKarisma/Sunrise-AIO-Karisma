@@ -11,6 +11,7 @@
 #include "../../hooks/godmode/godmode.h"
 #include "../../hooks/inactivity/inactivity_override.h"
 #include "../../hooks/no_turnback/no_turnback.h"
+#include "../../hooks/world_speed/world_speed.h"
 #include "../../inactivity/inactivity_settings_store.h"
 #include "../../player/player_settings_store.h"
 
@@ -41,6 +42,7 @@ constexpr int kLaneColumns = 7;
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
         ImGui::SetTooltip("%s", inactivity::kActivities[index].name.data());
     }
+
     // The live figure is the one the Client is timing by, so it reads as active and the set value
     // is dimmed. A lane held at its longest is timing nothing, so neither is active.
     const std::uint32_t live = status.liveValid ? status.live[index] : 0;
@@ -51,6 +53,7 @@ constexpr int kLaneColumns = 7;
     if (liveActive) {
         ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyle().Colors[ImGuiCol_TextDisabled]);
     }
+
     ImGui::InputScalar("##lane",
                        ImGuiDataType_U32,
                        &milliseconds,
@@ -58,15 +61,19 @@ constexpr int kLaneColumns = 7;
                        nullptr,
                        "%u",
                        ImGuiInputTextFlags_CharsDecimal);
+
     if (liveActive) {
         ImGui::PopStyleColor();
     }
+
     if (ImGui::IsItemDeactivatedAfterEdit()) {
         configured.timeouts[index] =
             std::clamp(milliseconds, inactivity::kMinimumTimeoutMs, inactivity::kMaximumTimeoutMs);
         changed = true;
     }
+
     ImGui::EndDisabled();
+
     // Outside the disabled block: the live value reads the same whether or not the field can be
     // edited.
     if (!status.liveValid) {
@@ -76,6 +83,7 @@ constexpr int kLaneColumns = 7;
     } else {
         ImGui::TextDisabled("%u", live);
     }
+
     ImGui::PopID();
     return changed;
 }
@@ -85,25 +93,33 @@ void draw_inactivity_clocks(const hooks::inactivity::Status& status) noexcept {
     // Read from the draw rather than the hold, so the Client is only asked while this section is
     // on screen to answer to.
     const hooks::inactivity::Timers timers = hooks::inactivity::timers();
+
     if (timers.idleValid) {
         ImGui::Text("Idle %.1f s", static_cast<double>(timers.idleMs) / 1000.0);
     } else {
         ImGui::TextDisabled("Idle -");
     }
+
     ImGui::SameLine();
+
     if (timers.sessionValid) {
         ImGui::Text("Session %.1f s", static_cast<double>(timers.sessionMs) / 1000.0);
     } else {
         ImGui::TextDisabled("Session -");
     }
+
     if (!status.liveGraceValid) {
         return;
     }
+
     const bool passed =
         status.liveGraceMs == 0 || (timers.sessionValid && timers.sessionMs > status.liveGraceMs);
+
     ImGui::SameLine();
+
     // Reported, never written.
     const double grace = static_cast<double>(status.liveGraceMs) / 1000.0;
+
     if (passed) {
         ImGui::TextDisabled("Grace %.1f s (passed)", grace);
     } else {
@@ -114,6 +130,7 @@ void draw_inactivity_clocks(const hooks::inactivity::Status& status) noexcept {
 /** Draws the inactivity section: the main switch, the lane grid and the Client's clocks. */
 void draw_inactivity() noexcept {
     inactivity::Settings configured = inactivity::get();
+
     // Taken once, so every line below and the grid all describe the same poll.
     const hooks::inactivity::Status status = hooks::inactivity::status();
 
@@ -125,6 +142,7 @@ void draw_inactivity() noexcept {
 
     // The two switches are exclusive, so turning this one on drops the set timeouts.
     bool changed = toggle::control("Enabled##inactivity", configured.enabled);
+
     if (changed && configured.enabled) {
         configured.custom = false;
     }
@@ -132,23 +150,30 @@ void draw_inactivity() noexcept {
     if (ImGui::CollapsingHeader("Advanced##inactivity")) {
         // A per-lane timeout has nothing to act on once every lane is already removed.
         ImGui::BeginDisabled(configured.enabled);
+
         if (toggle::control("Use set timeouts##inactivity_custom", configured.custom)) {
             if (configured.custom) {
                 configured.enabled = false;
             }
             changed = true;
         }
+
         ImGui::EndDisabled();
+
         ImGui::TextDisabled("In milliseconds");
         ImGui::Spacing();
+
         ImGui::BeginDisabled(configured.enabled || !configured.custom);
+
         if (ImGui::BeginTable("lanes", kLaneColumns, ImGuiTableFlags_SizingStretchSame)) {
             for (std::size_t index = 0; index < inactivity::kActivityCount; ++index) {
                 ImGui::TableNextColumn();
                 changed = draw_lane(index, configured, status) || changed;
             }
+
             ImGui::EndTable();
         }
+
         ImGui::EndDisabled();
         ImGui::Spacing();
         draw_inactivity_clocks(status);
@@ -172,12 +197,14 @@ void draw() noexcept {
 
     const bool changed = core::ui::components::toggle::control("Enabled##infinite_ammo",
                                                                settings.infiniteAmmoEnabled);
+
     if (changed) {
         (void)client::player::publish(settings);
     }
 
     ImGui::Spacing();
     ImGui::Spacing();
+
     ImGui::TextUnformatted("No Turnback");
     ImGui::Separator();
     ImGui::TextWrapped("Disable turnback-zone enforcement.");
@@ -193,6 +220,7 @@ void draw() noexcept {
 
     ImGui::Spacing();
     ImGui::Spacing();
+
     ImGui::TextUnformatted("Godmode");
     ImGui::Separator();
     ImGui::TextWrapped("Prevent the player from taking damage.");
@@ -208,6 +236,31 @@ void draw() noexcept {
 
     ImGui::Spacing();
     ImGui::Spacing();
+
+    ImGui::TextUnformatted("World Speed");
+    ImGui::Separator();
+    ImGui::TextWrapped("Change how quickly game time advances. 1.0x is the normal rate.");
+    ImGui::Spacing();
+
+    float worldSpeed = settings.worldSpeed;
+
+    ImGui::SetNextItemWidth(240.0F);
+
+    if (ImGui::SliderFloat("##world_speed",
+                           &worldSpeed,
+                           client::player::kMinimumWorldSpeed,
+                           client::player::kMaximumWorldSpeed,
+                           "%.2fx")) {
+        settings.worldSpeed = worldSpeed;
+
+        if (client::player::publish(settings)) {
+            (void)hooks::world_speed::apply(settings.worldSpeed);
+        }
+    }
+
+    ImGui::Spacing();
+    ImGui::Spacing();
+
     draw_inactivity();
 }
 

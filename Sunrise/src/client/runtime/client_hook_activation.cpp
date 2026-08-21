@@ -31,6 +31,7 @@
 #include "../hooks/retail_log/retail_log_lifecycle.h"
 #include "../hooks/spawn/spawn_runtime.h"
 #include "../hooks/teleport/runtime.h"
+#include "../hooks/world_speed/world_speed.h"
 #include "../patterns/registry.h"
 #include "../targets/game.h"
 #include "internal.h"
@@ -182,6 +183,8 @@ void clear_game_targets() noexcept {
     // Both patches resolve while disabled so their Player controls can switch them immediately.
     (void)hooks::no_turnback::install();
     (void)hooks::godmode::install();
+    // Resolves the RIP-relative world-time scalar and applies the saved multiplier.
+    (void)hooks::world_speed::install();
     // Resolves the activity config getter here; the hold itself runs on the frame tick.
     (void)hooks::inactivity::install();
     (void)hooks::queuez::install();

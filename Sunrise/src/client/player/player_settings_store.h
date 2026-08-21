@@ -2,11 +2,18 @@
 
 namespace sunrise::client::player {
 
+/** Normal game-time rate. Values above this make the world advance faster. */
+inline constexpr float kDefaultWorldSpeed = 1.0F;
+/** Bounds offered by the player panel and accepted from the saved configuration. */
+inline constexpr float kMinimumWorldSpeed = 0.1F;
+inline constexpr float kMaximumWorldSpeed = 10.0F;
+
 /** Runtime player configuration. This module owns it; Core settings do not carry it. */
 struct Settings {
     bool infiniteAmmoEnabled{false};
     bool noTurnbackEnabled{false};
     bool godmodeEnabled{false};
+    float worldSpeed{kDefaultWorldSpeed};
 };
 
 /**
