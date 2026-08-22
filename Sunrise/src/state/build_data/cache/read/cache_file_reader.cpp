@@ -33,6 +33,7 @@ namespace {
            && counts.socketEntryTables <= output.socketEntryTables.size()
            && counts.abilityBuckets <= output.abilityBuckets.size()
            && counts.progressions <= output.progressions.size()
+           && counts.records <= output.records.size()
            && counts.scenarios <= output.scenarios.size()
            && counts.rosterGroups <= output.rosterGroups.size()
            && counts.spawnStems <= output.spawnStems.size()
@@ -63,6 +64,7 @@ namespace {
         header.socketEntryTableCount,
         header.abilityBucketCount,
         header.progressionCount,
+        header.recordCount,
         header.scenarioCount,
         header.rosterGroupCount,
         header.spawnStemCount,

@@ -12,7 +12,9 @@
 #include "../../core/logging/log.h"
 #include "../../core/settings/settings.h"
 #include "../activity/defaults/activity_defaults_validation.h"
+#include "../build_data/nodes/node_persistence.h"
 #include "../build_data/runtime.h"
+#include "../record_claims/record_claims.h"
 #include "equipment/configured_equipment_identity.h"
 #include "runtime.h"
 #include "state.h"
@@ -30,11 +32,14 @@ namespace {
 
 /** Network-order IPv4 loopback returned by the in-process SignOn route. */
 constexpr std::uint32_t kLoopbackAddress = 0x7F000001;
+
 /** Default one-hour lifetime for generated SignOn session tokens. */
 constexpr std::uint32_t kDefaultTokenLifetimeSeconds = 3600;
+
 /** Family 5 uses the largest signed 64-bit value as its process-global object key. */
 constexpr std::uint64_t kGlobalFamily5Soid =
     static_cast<std::uint64_t>((std::numeric_limits<std::int64_t>::max)());
+
 /**
  * Fills fixed secret storage with Windows system randomness.
  * @tparam Size Required secret byte count.
@@ -56,28 +61,34 @@ template <std::size_t Size>
     if (soid == 0 || accountState.primarySoid == soid) {
         return true;
     }
+
     for (std::size_t index = 0; index < accountState.profileItemCount; ++index) {
         if (accountState.profileItems[index].instanceSoid == soid) {
             return true;
         }
     }
+
     for (std::size_t characterIndex = 0; characterIndex < accountState.characterCount;
          ++characterIndex) {
         const CharacterState& character = accountState.characters[characterIndex];
+
         if (character.soid == soid) {
             return true;
         }
+
         for (const std::optional<account::inventory::Item>& item : character.equipment.slots) {
             if (item.has_value() && item->instanceSoid == soid) {
                 return true;
             }
         }
+
         for (std::size_t index = 0; index < character.inventory.count; ++index) {
             if (character.inventory.values[index].instanceSoid == soid) {
                 return true;
             }
         }
     }
+
     return false;
 }
 
@@ -86,20 +97,26 @@ template <std::size_t Size>
     if (!account::valid_authored(accountState)) {
         return false;
     }
+
     for (std::size_t characterIndex = 0; characterIndex < accountState.characterCount;
          ++characterIndex) {
         CharacterState& character = accountState.characters[characterIndex];
+
         std::uint32_t next = 0;
+
         for (std::optional<account::inventory::Item>& item : character.equipment.slots) {
             if (item.has_value()) {
                 item->mutationSerial = static_cast<std::int32_t>(next++);
             }
         }
+
         for (std::size_t index = 0; index < character.inventory.count; ++index) {
             character.inventory.values[index].mutationSerial = static_cast<std::int32_t>(next++);
         }
+
         character.nextInventorySerial = next;
     }
+
     return account::valid(accountState);
 }
 
@@ -112,22 +129,28 @@ template <std::size_t Size>
     if (!account::valid(accountState)) {
         return false;
     }
+
     if (accountState.profileItemCount == 0) {
         // Nothing to canonicalize, so the socket relation is not needed. Demanding it here would
         // refuse the first account snapshot of an account that owns no profile stack at all, and
         // an empty account family never becomes active.
         return true;
     }
+
     if (!build_data::socket_plug_rules_ready()) {
         return false;
     }
+
     std::array<bool, account::inventory::kProfileItemCapacity> actionSources{};
     std::size_t actionSourceCount = 0;
+
     for (std::size_t index = 0; index < accountState.profileItemCount; ++index) {
         const account::inventory::ProfileItem& profileItem = accountState.profileItems[index];
+
         build_data::items::Definition item{};
         build_data::items::details::Definition detail{};
         build_data::inventory::buckets::Descriptor bucket{};
+
         if (!build_data::find_item_definition_hash(profileItem.definitionHash, item)
             || item.definitionHash != profileItem.definitionHash
             || !build_data::find_configured_item_detail(item.definitionIndex, detail)
@@ -139,15 +162,17 @@ template <std::size_t Size>
             || bucket.arraySelector != build_data::inventory::buckets::ArraySelector::profile) {
             return false;
         }
+
         actionSources[index] =
             build_data::is_profile_action_source(item.definitionIndex, item.bucketId);
+
         if (actionSources[index]
             && ++actionSourceCount > account::inventory::kProfileActionSourceCapacity) {
             return false;
         }
     }
 
-    // Currency, material, and consumable rows are native non-instanced stacks.  Clear any stale
+    // Currency, material, and consumable rows are native non-instanced stacks. Clear any stale
     // runtime key before allocating action-source identities so it cannot reserve the namespace.
     for (std::size_t index = 0; index < accountState.profileItemCount; ++index) {
         if (!actionSources[index]) {
@@ -156,22 +181,29 @@ template <std::size_t Size>
     }
 
     std::uint64_t nextProfileSoid = account::inventory::kFirstProfileItemInstanceSoid;
+
     for (std::size_t index = 0; index < accountState.profileItemCount; ++index) {
         account::inventory::ProfileItem& item = accountState.profileItems[index];
+
         if (!actionSources[index] || item.instanceSoid != 0) {
             continue;
         }
+
         while (identity_uses_soid(accountState, nextProfileSoid)) {
             if (nextProfileSoid == (std::numeric_limits<std::uint64_t>::max)()) {
                 return false;
             }
+
             ++nextProfileSoid;
         }
+
         item.instanceSoid = nextProfileSoid;
+
         if (nextProfileSoid != (std::numeric_limits<std::uint64_t>::max)()) {
             ++nextProfileSoid;
         }
     }
+
     return account::valid(accountState);
 }
 
@@ -197,65 +229,93 @@ bool initialize(void* module, const AccountState& initialAccount) noexcept {
 bool initialize(void* module,
                 const AccountState& initialAccount,
                 const activity::defaults::ActivityDefaults& activityDefaults) noexcept {
+
     AccountState runtimeAccount = initialAccount;
+
     if (!seed_inventory_runtime_fields(runtimeAccount)
         || !activity::defaults::valid(activityDefaults)) {
         return false;
     }
+
     if (!build_data::initialize(module, runtime::equipment::configured_hash(runtimeAccount))) {
         return false;
     }
+
+    // Preserve the existing Karisma/settings behavior for exotic catalyst completion.
     build_data::set_exotic_catalyst_completion_enabled(
         core::settings::get().completeExoticCatalysts);
+
+    // Claims are held beside the build data cache, so a restart keeps what the client already
+    // shows as Acquired. A missing file is a first run, not a failure.
+    (void)record_claims::initialize(module);
+
+    // Publishes the node table if a previous run wrote one, so a warm start counts
+    // categories without needing the package pass to run again.
+    (void)build_data::nodes::initialize(module);
+
     // A cache hit already has the complete plug relation, so publish canonical profile identities
-    // in the first State image.  On a first cache build, snapshot preparation repeats this step
+    // in the first State image. On a first cache build, snapshot preparation repeats this step
     // after package extraction has published the relation.
     if (build_data::socket_plug_rules_ready()
         && !canonicalize_profile_item_identities(runtimeAccount)) {
         build_data::shutdown();
         return false;
     }
+
     {
         // The account key is authored, and a truncated one is consistent enough to go unnoticed.
         std::array<char, 96> line{};
+
         const int written =
             std::snprintf(line.data(),
                           line.size(),
                           "ev=account stage=identity primary=0x%016llX characters=%zu",
                           static_cast<unsigned long long>(runtimeAccount.primarySoid),
                           runtimeAccount.characterCount);
+
         if (written > 0) {
             core::log::write(core::log::Channel::state,
                              core::log::Level::info,
                              {line.data(), static_cast<std::size_t>(written)});
         }
     }
+
     State initialized{};
+
     if (!randomize(initialized.signOn.encryptionKey)
         || !randomize(initialized.signOn.authenticationKey)
         || !randomize(initialized.signOn.sessionToken) || !randomize(initialized.bap.nonce)
         || !randomize(initialized.bap.sessionKey) || !randomize(initialized.bap.envelopeIv)) {
+
         SecureZeroMemory(&initialized, sizeof initialized);
         build_data::shutdown();
         return false;
     }
+
     initialized.signOn.relayAddress = kLoopbackAddress;
+
     // The published relay port is the one the listener binds, so both move with one setting.
     initialized.signOn.relayPort = core::settings::get().server.bapPort;
+
     initialized.signOn.tokenLifetimeSeconds = kDefaultTokenLifetimeSeconds;
+
     initialized.account = runtimeAccount;
     initialized.activity.defaults = activityDefaults;
     initialized.investment.family5.objectSoid = kGlobalFamily5Soid;
+
     // Only the override lists come from settings. Identity and gate stay owned by State.
     const Family5State& authored = core::settings::get().initialFamily5;
+
     initialized.investment.family5.flags = authored.flags;
     initialized.investment.family5.flagCount = authored.flagCount;
     initialized.investment.family5.values = authored.values;
     initialized.investment.family5.valueCount = authored.valueCount;
-    // The arm is account-wide and rides the first ws-503, which goes out before any pick. Nothing
-    // is selected at boot, so it is armed when any authored character carries the bypass. The
-    // per-character objB byte is the other half, and it still decides which character it opens.
+
+    // The arm is account-wide and rides the first ws-503, which goes out before any pick.
+    // Nothing is selected at boot, so it is armed when any authored character carries the bypass.
+    // The per-character objB byte is the other half, and it still decides which character it opens.
     for (std::size_t index = 0; index < runtimeAccount.characterCount; ++index) {
+
         if (runtimeAccount.characters[index].contentBypass) {
             initialized.investment.family5.contentGateArm = true;
             break;
@@ -264,17 +324,24 @@ bool initialize(void* module,
 
     // Publish one complete State only after every generated secret is valid.
     AcquireSRWLockExclusive(&runtime::storage::g_stateLock);
+
     runtime::storage::g_state = initialized;
+
     ReleaseSRWLockExclusive(&runtime::storage::g_stateLock);
+
     SecureZeroMemory(&initialized, sizeof initialized);
+
     return true;
 }
 
 /** Securely erases State, including activity destinations and matchmaking descriptors. */
 void shutdown() noexcept {
     AcquireSRWLockExclusive(&runtime::storage::g_stateLock);
+
     SecureZeroMemory(&runtime::storage::g_state, sizeof runtime::storage::g_state);
+
     ReleaseSRWLockExclusive(&runtime::storage::g_stateLock);
+
     build_data::shutdown();
 }
 
@@ -286,12 +353,17 @@ const SignOnState& sign_on() noexcept {
 /** Ensures every native profile action source has one unique runtime item-instance key. */
 bool ensure_profile_item_identities() noexcept {
     AcquireSRWLockExclusive(&runtime::storage::g_stateLock);
+
     AccountState candidate = runtime::storage::g_state.account;
+
     const bool ready = canonicalize_profile_item_identities(candidate);
+
     if (ready) {
         runtime::storage::g_state.account = candidate;
     }
+
     ReleaseSRWLockExclusive(&runtime::storage::g_stateLock);
+
     return ready;
 }
 
@@ -301,12 +373,17 @@ bool ensure_profile_item_identities() noexcept {
  * @return True when the complete token is kept for this process.
  */
 bool publish_bootstrap_token(std::span<const std::byte> token) noexcept {
+
     SignOnState& signOn = runtime::storage::g_state.signOn;
+
     if (token.size() != signOn.bootstrapToken.size()) {
         return false;
     }
+
     std::copy(token.begin(), token.end(), signOn.bootstrapToken.begin());
+
     signOn.bootstrapTokenPresent = true;
+
     return true;
 }
 
@@ -318,11 +395,15 @@ const BapState& bap() noexcept {
 /** Copies one complete evaluated content state with build-derived catalyst overrides. */
 bool investment_snapshot(InvestmentState& output) noexcept {
     AcquireSRWLockShared(&runtime::storage::g_stateLock);
+
     InvestmentState snapshot = runtime::storage::g_state.investment;
+
     ReleaseSRWLockShared(&runtime::storage::g_stateLock);
+
     if (!build_data::complete_exotic_catalyst_investment(snapshot.family5)) {
         return false;
     }
+
     output = snapshot;
     return true;
 }

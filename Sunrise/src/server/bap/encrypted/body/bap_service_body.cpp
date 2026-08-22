@@ -165,7 +165,8 @@ bool process(const ServiceRoute& route,
                 state::NativeCharacterCreation creation{};
                 creation.race = static_cast<state::CharacterRace>(decoded.race);
                 creation.gender = static_cast<state::CharacterGender>(decoded.gender);
-                creation.characterClass = static_cast<state::CharacterClass>(decoded.characterClass);
+                creation.characterClass =
+                    static_cast<state::CharacterClass>(decoded.characterClass);
                 creation.presentationHeader = decoded.presentationHeader;
                 creation.creationHeader = decoded.creationHeader;
                 creation.creationTail = decoded.creationTail;
@@ -173,13 +174,13 @@ bool process(const ServiceRoute& route,
                 result = state::prepare_character_creation(creation, mutation);
             }
 
-            const bool queuezReady =
-                result == state::CharacterCreationResult::ok && queuez::valid(queuezState)
-                && queuezState.family4Active && queuezState.family3Active
-                && queuezState.family4RootSoid == mutation.accountSoid
-                && queuezState.family3RootSoid == mutation.accountSoid
-                && queuezState.family3Phase == queuez::Family3Phase::normal
-                && (!mutation.selectCreated || queuezState.family0Active);
+            const bool queuezReady = result == state::CharacterCreationResult::ok
+                                     && queuez::valid(queuezState) && queuezState.family4Active
+                                     && queuezState.family3Active
+                                     && queuezState.family4RootSoid == mutation.accountSoid
+                                     && queuezState.family3RootSoid == mutation.accountSoid
+                                     && queuezState.family3Phase == queuez::Family3Phase::normal
+                                     && (!mutation.selectCreated || queuezState.family0Active);
             std::array<char, core::log::kLineCapacity> line{};
             const int count = std::snprintf(
                 line.data(),
@@ -282,6 +283,7 @@ bool process(const ServiceRoute& route,
             return false;
         }
         outcome.hasSubscription = webOutcome.hasSubscription;
+        outcome.hasRecordClaim = webOutcome.hasRecordClaim;
         outcome.subscription = webOutcome.subscription;
         const auto* equipmentSwap =
             web_service::mutation_if<state::PendingEquipmentSwap>(webOutcome);
@@ -513,6 +515,27 @@ bool process(const ServiceRoute& route,
                 transaction.pending = *itemDismantle;
             }
         }
+
+        // A pick that names the resident character moves nothing, so staging refuses it and the
+        // reply still stands on its own.
+        if (webOutcome.hasRecordClaim) {
+            // Every other client action promises the exact Family-4 revision that makes it
+            // authoritative, and the claim was answering with the sentinel instead. The account
+            // resync staged later carries the next version, so promise that one here.
+            middleware::web_service::StatusResponse status{};
+            status.value = queuezState.family4Version + 1;
+            if (!middleware::web_service::encode_response(
+                    message,
+                    middleware::web_service::ResponseShape::statusPair,
+                    status,
+                    output,
+                    written)) {
+                core::log::write(core::log::Channel::server,
+                                 core::log::Level::warn,
+                                 "ev=ws1801 stage=response result=fail");
+            }
+        }
+
         if (webOutcome.hasSelectedCharacter
             && queuez::stage_select_character(
                 queuezState, webOutcome.selectedCharacterSoid, outcome.selectCharacter)) {

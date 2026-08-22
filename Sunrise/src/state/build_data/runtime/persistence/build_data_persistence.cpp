@@ -20,6 +20,7 @@
 #include "../../items/socket_plugs/socket_plug_catalog.h"
 #include "../../material_requirements/material_requirement_catalog.h"
 #include "../../progressions/progression_catalog.h"
+#include "../../records/record_catalog.h"
 #include "../../runtime.h"
 #include "../../scenarios/scenario_catalog.h"
 #include "../../socket_entry_lists/socket_entry_list_catalog.h"
@@ -43,6 +44,7 @@ template <typename Value, std::size_t Capacity>
     if (storage.size() != Capacity) {
         storage.assign(Capacity, Value{});
     }
+
     return storage;
 }
 
@@ -62,9 +64,13 @@ to_record(const constants::InvestmentConstants& value) noexcept {
  */
 [[nodiscard]] bool snapshot_domains_locked(Context& state,
                                            cache::records::DomainCounts& counts) noexcept {
+
     counts = {};
+
     const cache::records::MutableDomains scratch = scratch_domains(state);
+
     *scratch.constants = to_record(constants::snapshot());
+
     return content::snapshot(scratch.named, counts.named)
            && items::snapshot(scratch.items, counts.items)
            && collectibles::snapshot(scratch.collectibles, counts.collectibles)
@@ -84,6 +90,7 @@ to_record(const constants::InvestmentConstants& value) noexcept {
                                                         counts.socketEntryTables)
            && abilities::snapshot(scratch.abilityBuckets, counts.abilityBuckets)
            && progressions::snapshot(scratch.progressions, counts.progressions)
+           && records::snapshot(scratch.records, counts.records)
            && scenarios::snapshot(scratch.scenarios, counts.scenarios)
            && scenarios::snapshot_groups(scratch.rosterGroups, counts.rosterGroups)
            && spawn_sets::snapshot(scratch.spawnStems, counts.spawnStems)
@@ -102,12 +109,14 @@ to_record(const constants::InvestmentConstants& value) noexcept {
 /** @return True when every required extracted domain is complete in State. */
 [[nodiscard]] bool required_domains_ready() noexcept {
     constants::InvestmentConstants published{};
+
     return runtime::named::ready() && item_definitions_ready() && configured_item_details_ready()
            && collectible_definitions_ready() && socket_plug_rules_ready()
            && material_requirement_sets_ready() && inventory_bucket_descriptors_ready()
            && socket_entry_lists_ready() && ability_buckets_ready()
-           && progression_definitions_ready() && scenario_layouts_ready() && spawn_sets_ready()
-           && hash_names_ready() && entity_names_ready() && constants::find(published);
+           && progression_definitions_ready() && record_definitions_ready()
+           && scenario_layouts_ready() && spawn_sets_ready() && hash_names_ready()
+           && entity_names_ready() && constants::find(published);
 }
 
 } // namespace
@@ -119,73 +128,102 @@ Context& context() noexcept {
 
 /** Gives mutable views over every fixed snapshot buffer. */
 cache::records::MutableDomains scratch_domains(Context& state) noexcept {
+
     const auto named = ensure_scratch<content::Definition, content::kDefinitionCatalogCapacity>(
         state.namedScratch);
+
     const auto items =
         ensure_scratch<build_data::items::Definition, build_data::items::kDefinitionCapacity>(
             state.itemScratch);
+
     const auto collectibles =
         ensure_scratch<build_data::collectibles::Definition,
                        build_data::collectibles::kDefinitionCapacity>(state.collectibleScratch);
+
     const auto materialRequirementSets = ensure_scratch<material_requirements::Definition,
                                                         material_requirements::kDefinitionCapacity>(
         state.materialRequirementSetScratch);
+
     const auto itemDetails =
         ensure_scratch<build_data::items::details::Definition,
                        build_data::items::details::kDefinitionCapacity>(state.itemDetailScratch);
+
     const auto socketPlugRules =
         ensure_scratch<build_data::items::socket_plugs::Rule,
                        build_data::items::socket_plugs::kRuleCapacity>(state.socketPlugRuleScratch);
+
     const auto socketPlugPools =
         ensure_scratch<build_data::items::socket_plugs::Pool,
                        build_data::items::socket_plugs::kPoolCapacity>(state.socketPlugPoolScratch);
+
     const auto socketPlugMembers = ensure_scratch<build_data::items::socket_plugs::Member,
                                                   build_data::items::socket_plugs::kMemberCapacity>(
         state.socketPlugMemberScratch);
+
     const auto exoticCatalysts = ensure_scratch<build_data::items::catalysts::Definition,
                                                 build_data::items::catalysts::kDefinitionCapacity>(
         state.exoticCatalystScratch);
+
     const auto inventoryBuckets =
         ensure_scratch<inventory::buckets::Descriptor, inventory::buckets::kDescriptorCapacity>(
             state.inventoryBucketScratch);
+
     const auto socketEntryLists =
         ensure_scratch<socket_entry_lists::Definition, socket_entry_lists::kDefinitionCapacity>(
             state.socketEntryListScratch);
+
     const auto socketEntryTables =
         ensure_scratch<socket_entry_lists::EntryTable, socket_entry_lists::kEntryTableCapacity>(
             state.socketEntryTableScratch);
+
     const auto abilityBuckets =
         ensure_scratch<abilities::Definition, abilities::kDefinitionCapacity>(
             state.abilityBucketScratch);
+
     const auto progressions =
         ensure_scratch<progressions::Definition, progressions::kDefinitionCapacity>(
             state.progressionScratch);
+
+    const auto recordRows =
+        ensure_scratch<records::Definition, records::kDefinitionCapacity>(state.recordScratch);
+
     const auto scenarios = ensure_scratch<scenarios::Definition, scenarios::kDefinitionCapacity>(
         state.scenarioScratch);
+
     const auto rosterGroups =
         ensure_scratch<scenarios::RosterGroup, scenarios::kRosterGroupCapacity>(
             state.rosterGroupScratch);
+
     const auto spawnStems =
         ensure_scratch<spawn_sets::Stem, spawn_sets::kStemCapacity>(state.spawnStemScratch);
+
     const auto spawnNameHashes =
         ensure_scratch<spawn_sets::NameHash, spawn_sets::kNameHashCapacity>(
             state.spawnNameHashScratch);
+
     const auto spawnPoints =
         ensure_scratch<spawn_sets::Point, spawn_sets::kPointCapacity>(state.spawnPointScratch);
+
     const auto hashNames =
         ensure_scratch<hash_names::Name, hash_names::kNameCapacity>(state.hashNameScratch);
-    const auto entityNames = ensure_scratch<entity_names::Name, entity_names::kNameCapacity>(
-        state.entityNameScratch);
+
+    const auto entityNames =
+        ensure_scratch<entity_names::Name, entity_names::kNameCapacity>(state.entityNameScratch);
+
     const auto vendorIndex =
         ensure_scratch<vendors::IndexEntry, vendors::kIndexCapacity>(state.vendorIndexScratch);
+
     const auto vendorDefinitions =
         ensure_scratch<vendors::Definition, vendors::kDefinitionCapacity>(
             state.vendorDefinitionScratch);
+
     const auto vendorSaleRows =
         ensure_scratch<vendors::SaleRow, vendors::kSaleRowCapacity>(state.vendorSaleRowScratch);
+
     const auto vendorInstalledRows =
         ensure_scratch<vendors::InstalledRow, vendors::kInstalledRowCapacity>(
             state.vendorInstalledRowScratch);
+
     return {
         &state.constantsScratch,
         named,
@@ -202,6 +240,7 @@ cache::records::MutableDomains scratch_domains(Context& state) noexcept {
         socketEntryTables,
         abilityBuckets,
         progressions,
+        recordRows,
         scenarios,
         rosterGroups,
         spawnStems,
@@ -241,6 +280,7 @@ void release_scratch_locked(Context& state) noexcept {
     release_bank(state.socketEntryTableScratch);
     release_bank(state.abilityBucketScratch);
     release_bank(state.progressionScratch);
+    release_bank(state.recordScratch);
     release_bank(state.scenarioScratch);
     release_bank(state.rosterGroupScratch);
     release_bank(state.spawnStemScratch);
@@ -252,12 +292,14 @@ void release_scratch_locked(Context& state) noexcept {
     release_bank(state.vendorDefinitionScratch);
     release_bank(state.vendorSaleRowScratch);
     release_bank(state.vendorInstalledRowScratch);
+
     state.constantsScratch = {};
 }
 
 /** Clears fixed cache paths, identity, flags, and snapshot storage. */
 void clear_locked(Context& state) noexcept {
     release_scratch_locked(state);
+
     state.cacheDirectory = {};
     state.cachePath = {};
     state.buildIdentity = {};
@@ -270,52 +312,81 @@ void clear_locked(Context& state) noexcept {
 /** Gives read-only views over the used rows of one canonical snapshot. */
 cache::records::Domains occupied_domains(Context& state,
                                          const cache::records::DomainCounts& counts) noexcept {
+
     const std::span<const items::details::Definition> itemDetails{state.itemDetailScratch.data(),
                                                                   counts.itemDetails};
+
     const std::span<const items::socket_plugs::Rule> socketPlugRules{
         state.socketPlugRuleScratch.data(), counts.socketPlugRules};
+
     const std::span<const items::socket_plugs::Pool> socketPlugPools{
         state.socketPlugPoolScratch.data(), counts.socketPlugPools};
+
     const std::span<const items::socket_plugs::Member> socketPlugMembers{
         state.socketPlugMemberScratch.data(), counts.socketPlugMembers};
+
     const std::span<const items::catalysts::Definition> exoticCatalysts{
         state.exoticCatalystScratch.data(), counts.exoticCatalysts};
+
     return {
         state.constantsScratch,
+
         std::span<const content::Definition>{state.namedScratch.data(), counts.named},
+
         std::span<const build_data::items::Definition>{state.itemScratch.data(), counts.items},
+
         std::span<const build_data::collectibles::Definition>{state.collectibleScratch.data(),
                                                               counts.collectibles},
+
         std::span<const material_requirements::Definition>{
             state.materialRequirementSetScratch.data(), counts.materialRequirementSets},
+
         itemDetails,
         socketPlugRules,
         socketPlugPools,
         socketPlugMembers,
         exoticCatalysts,
+
         std::span<const inventory::buckets::Descriptor>{state.inventoryBucketScratch.data(),
                                                         counts.inventoryBuckets},
+
         std::span<const socket_entry_lists::Definition>{state.socketEntryListScratch.data(),
                                                         counts.socketEntryLists},
+
         std::span<const socket_entry_lists::EntryTable>{state.socketEntryTableScratch.data(),
                                                         counts.socketEntryTables},
+
         std::span<const abilities::Definition>{state.abilityBucketScratch.data(),
                                                counts.abilityBuckets},
+
         std::span<const progressions::Definition>{state.progressionScratch.data(),
                                                   counts.progressions},
+
+        std::span<const records::Definition>{state.recordScratch.data(), counts.records},
+
         std::span<const scenarios::Definition>{state.scenarioScratch.data(), counts.scenarios},
+
         std::span<const scenarios::RosterGroup>{state.rosterGroupScratch.data(),
                                                 counts.rosterGroups},
+
         std::span<const spawn_sets::Stem>{state.spawnStemScratch.data(), counts.spawnStems},
+
         std::span<const spawn_sets::NameHash>{state.spawnNameHashScratch.data(),
                                               counts.spawnNameHashes},
+
         std::span<const spawn_sets::Point>{state.spawnPointScratch.data(), counts.spawnPoints},
+
         std::span<const hash_names::Name>{state.hashNameScratch.data(), counts.hashNames},
+
         std::span<const entity_names::Name>{state.entityNameScratch.data(), counts.entityNames},
+
         std::span<const vendors::IndexEntry>{state.vendorIndexScratch.data(), counts.vendorIndex},
+
         std::span<const vendors::Definition>{state.vendorDefinitionScratch.data(),
                                              counts.vendorDefinitions},
+
         std::span<const vendors::SaleRow>{state.vendorSaleRowScratch.data(), counts.vendorSaleRows},
+
         std::span<const vendors::InstalledRow>{state.vendorInstalledRowScratch.data(),
                                                counts.vendorInstalledRows},
     };
@@ -323,18 +394,23 @@ cache::records::Domains occupied_domains(Context& state,
 
 /** Saves one canonical snapshot when all domains required by its build are ready. */
 bool persist_if_ready_locked(Context& state, bool catalystRequired) noexcept {
+
     if (!required_domains_ready() || (catalystRequired && !exotic_catalysts_ready())
         || state.persisted || !state.enabled) {
         return true;
     }
+
     cache::records::DomainCounts counts{};
+
     // One canonical snapshot keeps header counts and payload rows in the same commit.
     if (!snapshot_domains_locked(state, counts)) {
         return false;
     }
+
     // The write flushes every domain to disk once. It is the only stall here, so the overlay
     // covers just it.
     core::ui::busy::begin(core::ui::busy::Task::cacheWrite);
+
     const bool written =
         cache::write(state.cacheDirectory.chars.data(),
                      state.cachePath.chars.data(),
@@ -342,13 +418,18 @@ bool persist_if_ready_locked(Context& state, bool catalystRequired) noexcept {
                      occupied_domains(state, counts),
                      state.replaceStaleCache ? cache::WriteDisposition::replaceStale
                                              : cache::WriteDisposition::createOnly);
+
     core::ui::busy::end(core::ui::busy::Task::cacheWrite);
+
     if (!written) {
         return false;
     }
+
     state.persisted = true;
     state.replaceStaleCache = false;
+
     release_scratch_locked(state);
+
     return true;
 }
 
@@ -359,22 +440,31 @@ namespace sunrise::state::build_data {
 /** @return True when required domains are ready and any safe cache write works. */
 bool persist() noexcept {
     runtime::persistence::Context& state = runtime::persistence::context();
+
     AcquireSRWLockExclusive(&state.lock);
+
     const bool requiredReady = runtime::persistence::required_domains_ready();
+
     bool result = false;
+
     switch (runtime::persistence::cache_action(
         requiredReady, exotic_catalysts_ready(), state.catalystError)) {
+
     case runtime::persistence::CacheAction::waitForDomains:
         break;
+
     case runtime::persistence::CacheAction::writeRequiredDomains:
         // Unsupported catalyst facts do not prevent the other build-bound domains from caching.
         result = runtime::persistence::persist_if_ready_locked(state, false);
         break;
+
     case runtime::persistence::CacheAction::writeCompleteCache:
         result = runtime::persistence::persist_if_ready_locked(state, true);
         break;
     }
+
     ReleaseSRWLockExclusive(&state.lock);
+
     return result;
 }
 
