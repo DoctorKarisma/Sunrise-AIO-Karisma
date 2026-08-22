@@ -24,6 +24,7 @@
 #include "../../spawn_sets/spawn_set_build.h"
 #include "build.h"
 #include "internal.h"
+#include "package_socket_plug_build.h"
 
 namespace sunrise::client::content::items::packages {
 namespace {
@@ -42,7 +43,8 @@ namespace {
            && state::build_data::progression_definitions_ready()
            && state::build_data::scenario_layouts_ready() && state::build_data::spawn_sets_ready()
            && state::build_data::hash_names_ready() && state::build_data::entity_names_ready()
-           && state::build_data::investment_constants_ready();
+           && state::build_data::investment_constants_ready()
+           && state::build_data::exotic_catalysts_ready();
 }
 
 /** @return True when every item and investment-root domain is published. */
@@ -57,7 +59,8 @@ namespace {
            && state::build_data::ability_buckets_ready()
            && state::build_data::socket_entry_buckets_ready()
            && state::build_data::progression_definitions_ready()
-           && state::build_data::investment_constants_ready();
+           && state::build_data::investment_constants_ready()
+           && state::build_data::exotic_catalysts_ready();
 }
 
 } // namespace
@@ -67,53 +70,69 @@ bool build() noexcept {
     if (package_domains_ready()) {
         return true;
     }
+
     static Storage storage{};
     reader::BlockKeys keys{};
     core::path::Buffer directory{};
+
     if (!collect_keys(keys)) {
         report(0, "keys");
         return false;
     }
+
     std::size_t rowCount = 0;
     const char* reason = "directory";
+
     if (!package_directory(directory)) {
         SecureZeroMemory(&keys, sizeof keys);
         report(0, reason);
         return false;
     }
+
     // The destination layouts and the spawn sets share this pass's directory, keys, and block
     // storage. Both are independent of the item table, so a failure here leaves it alone.
     {
         const reader::Source packageSource{directory.chars.data(), &keys};
+
         (void)content::scenarios::build(packageSource, storage.scratch);
         (void)content::spawn_sets::build(packageSource, storage.scratch);
         (void)content::hash_names::build(packageSource, storage.scratch);
         (void)content::entity_names::build(packageSource, storage.scratch);
     }
+
     if (root_domains_ready()) {
         SecureZeroMemory(&keys, sizeof keys);
         return true;
     }
+
     reason = "tag";
+
     std::array<std::uint32_t, kContainerCandidates> candidates{};
     std::size_t candidateCount = 0;
+
     const bool named = investment_globals_tags(candidates, candidateCount);
+
     if (named) {
         const reader::Source source{directory.chars.data(), &keys};
         tables::Array table{};
         bool located = false;
+
         reason = "read";
+
         for (std::size_t candidate = 0; candidate < candidateCount && !located; ++candidate) {
             if (!reader::read_tag(
                     source, storage.scratch, candidates[candidate], storage.container)) {
                 continue;
             }
+
             // Fixed navigation: globals child zero is the investment root, whose slot holds the
             // item table, whose array descriptor sits at a fixed offset.
             std::uint32_t rootTag = 0;
             std::uint32_t rootClass = 0;
             std::uint32_t tableTag = 0;
+
             reason = "root";
+
             if (!tables::child_tag(std::span<const std::byte>{storage.container},
                                    tables::kInvestmentRootChild,
                                    rootTag)
@@ -122,12 +141,16 @@ bool build() noexcept {
                 || rootClass != tables::kInvestmentRootClass) {
                 continue;
             }
+
             // The same root names the bucket and socket-list tables.
             storage.root = storage.child;
+
             if (!state::build_data::socket_plug_rules_ready()) {
                 std::uint32_t plugSetTag = 0;
                 tables::Array plugSets{};
+
                 reason = "plug_sets";
+
                 if (!tables::slot_tag(std::span<const std::byte>{storage.root},
                                       tables::kPlugSetTableSlot,
                                       plugSetTag)
@@ -139,14 +162,36 @@ bool build() noexcept {
                     continue;
                 }
             }
+
+            if (!state::build_data::exotic_catalysts_ready()) {
+                reason = "catalyst_gates";
+
+                if (!read_catalyst_acquisition_gates(source,
+                                                     storage.scratch,
+                                                     std::span<const std::byte>{storage.root},
+                                                     storage.child,
+                                                     storage.catalystAcquisitionGates)
+                    || !read_catalyst_objective_values(source,
+                                                       storage.scratch,
+                                                       std::span<const std::byte>{storage.root},
+                                                       storage.child,
+                                                       storage.catalystObjectiveValues)) {
+                    continue;
+                }
+            }
+
             reason = "buckets";
+
             if (!build_buckets(source, storage, std::span<const std::byte>{storage.root})) {
                 continue;
             }
+
             (void)build_socket_entry_lists(
                 source, storage, std::span<const std::byte>{storage.root});
+
             if (!state::build_data::progression_definitions_ready()) {
                 std::size_t progressionCount = 0;
+
                 if (build_progressions(source,
                                        storage.scratch,
                                        std::span<const std::byte>{storage.root},
@@ -157,8 +202,10 @@ bool build() noexcept {
                         std::span(storage.progressionRows).first(progressionCount));
                 }
             }
+
             if (!state::build_data::investment_constants_ready()) {
                 state::build_data::constants::InvestmentConstants extracted{};
+
                 if (read_investment_constants(source,
                                               storage.scratch,
                                               std::span<const std::byte>{storage.root},
@@ -167,19 +214,24 @@ bool build() noexcept {
                     (void)state::build_data::publish_investment_constants(extracted);
                 }
             }
+
             reason = "slot";
+
             if (!tables::slot_tag(
                     std::span<const std::byte>{storage.root}, tables::kItemTableSlot, tableTag)
                 || tableTag == 0
                 || !reader::read_tag(source, storage.scratch, tableTag, storage.child)) {
                 continue;
             }
+
             reason = "table";
+
             located = tables::find_array_at(std::span<const std::byte>{storage.child},
                                             tables::kTableArrayDescriptor,
                                             table)
                       && table.elementClass == tables::kItemIndexTableClass;
         }
+
         if (located && build_item_rows(source, storage, table, rowCount, reason)) {
             if (!build_material_requirements(
                     source, storage, std::span<const std::byte>{storage.root}, table.count)) {
@@ -192,16 +244,21 @@ bool build() noexcept {
             }
         }
     }
+
     SecureZeroMemory(&keys, sizeof keys);
+
     const bool complete = package_domains_ready();
     const bool itemDomainsReady = root_domains_ready();
+
     if (complete) {
         // Nothing reads a package again until the next boot, so this reader's files go back now.
         reader::close_files(storage.scratch);
     }
+
     // Scenario, spawn-set, and hash-name extraction advance over later refresh slices and report
     // their own progress. Do not mislabel one of those pending domains as the last item substage.
     report(itemDomainsReady ? state::build_data::item_definition_count() : 0, reason);
+
     return complete;
 }
 

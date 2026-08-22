@@ -74,6 +74,9 @@ void clear(records::MutableDomains output) noexcept {
     std::fill(output.socketPlugMembers.begin(),
               output.socketPlugMembers.end(),
               items::socket_plugs::Member{});
+    std::fill(output.exoticCatalysts.begin(),
+              output.exoticCatalysts.end(),
+              items::catalysts::Definition{});
     std::fill(output.inventoryBuckets.begin(),
               output.inventoryBuckets.end(),
               inventory::buckets::Descriptor{});
@@ -113,6 +116,7 @@ bool expected_size(const records::DomainCounts& counts, std::uint64_t& size) noe
            && add_records(counts.socketPlugRules, sizeof(records::SocketPlugRuleRecord), size)
            && add_records(counts.socketPlugPools, sizeof(records::SocketPlugPoolRecord), size)
            && add_records(counts.socketPlugMembers, sizeof(records::SocketPlugMemberRecord), size)
+           && add_records(counts.exoticCatalysts, sizeof(records::ExoticCatalystRecord), size)
            && add_records(counts.inventoryBuckets, sizeof(records::InventoryBucketRecord), size)
            && add_records(counts.socketEntryLists, sizeof(records::SocketEntryListRecord), size)
            && add_records(counts.socketEntryTables, sizeof(records::SocketEntryTableRecord), size)
@@ -134,112 +138,146 @@ bool expected_size(const records::DomainCounts& counts, std::uint64_t& size) noe
 
 /** Reads every payload array and checks the decoded domains as one transaction. */
 bool read_payload(HANDLE file,
+                  const BuildIdentity& build,
                   const records::InvestmentConstants& constants,
                   const records::DomainCounts& counts,
                   records::MutableDomains output,
                   std::uint64_t& checksum) noexcept {
     checksum = records::checksum_value(records::kChecksumOffsetBasis, constants);
+
     bool valid =
         read_domain<records::NamedRecord>(file, output.named.first(counts.named), checksum);
+
     valid =
         valid && read_domain<records::ItemRecord>(file, output.items.first(counts.items), checksum);
+
     valid = valid
             && read_domain<records::CollectibleRecord>(
                 file, output.collectibles.first(counts.collectibles), checksum);
+
     valid =
         valid
         && read_domain<records::MaterialRequirementSetRecord>(
             file, output.materialRequirementSets.first(counts.materialRequirementSets), checksum);
+
     valid = valid
             && read_domain<records::ItemDetailRecord>(
                 file, output.itemDetails.first(counts.itemDetails), checksum);
+
     valid = valid
             && read_domain<records::SocketPlugRuleRecord>(
                 file, output.socketPlugRules.first(counts.socketPlugRules), checksum);
+
     valid = valid
             && read_domain<records::SocketPlugPoolRecord>(
                 file, output.socketPlugPools.first(counts.socketPlugPools), checksum);
+
     valid = valid
             && read_domain<records::SocketPlugMemberRecord>(
                 file, output.socketPlugMembers.first(counts.socketPlugMembers), checksum);
+
+    valid = valid
+            && read_domain<records::ExoticCatalystRecord>(
+                file, output.exoticCatalysts.first(counts.exoticCatalysts), checksum);
+
     valid = valid
             && read_domain<records::InventoryBucketRecord>(
                 file, output.inventoryBuckets.first(counts.inventoryBuckets), checksum);
+
     valid = valid
             && read_domain<records::SocketEntryListRecord>(
                 file, output.socketEntryLists.first(counts.socketEntryLists), checksum);
+
     valid = valid
             && read_domain<records::SocketEntryTableRecord>(
                 file, output.socketEntryTables.first(counts.socketEntryTables), checksum);
+
     valid = valid
             && read_domain<records::AbilityBucketRecord>(
                 file, output.abilityBuckets.first(counts.abilityBuckets), checksum);
+
     valid = valid
             && read_domain<records::ProgressionRecord>(
                 file, output.progressions.first(counts.progressions), checksum);
+
     valid = valid
             && read_domain<records::ScenarioRecord>(
                 file, output.scenarios.first(counts.scenarios), checksum);
+
     valid = valid
             && read_domain<records::RosterGroupRecord>(
                 file, output.rosterGroups.first(counts.rosterGroups), checksum);
+
     valid = valid
             && read_domain<records::SpawnStemRecord>(
                 file, output.spawnStems.first(counts.spawnStems), checksum);
+
     valid = valid
             && read_domain<records::SpawnNameHashRecord>(
                 file, output.spawnNameHashes.first(counts.spawnNameHashes), checksum);
+
     valid = valid
             && read_domain<records::SpawnPointRecord>(
                 file, output.spawnPoints.first(counts.spawnPoints), checksum);
+
     valid = valid
             && read_domain<records::HashNameRecord>(
                 file, output.hashNames.first(counts.hashNames), checksum);
+
     valid = valid
             && read_domain<records::EntityNameRecord>(
                 file, output.entityNames.first(counts.entityNames), checksum);
+
     valid = valid
             && read_domain<records::VendorIndexRecord>(
                 file, output.vendorIndex.first(counts.vendorIndex), checksum);
+
     valid = valid
             && read_domain<records::VendorDefinitionRecord>(
                 file, output.vendorDefinitions.first(counts.vendorDefinitions), checksum);
+
     valid = valid
             && read_domain<records::VendorSaleRowRecord>(
                 file, output.vendorSaleRows.first(counts.vendorSaleRows), checksum);
+
     valid = valid
             && read_domain<records::VendorInstalledRowRecord>(
                 file, output.vendorInstalledRows.first(counts.vendorInstalledRows), checksum);
+
     if (!valid) {
         return false;
     }
-    return records::valid_domains({
-        constants,
-        output.named.first(counts.named),
-        output.items.first(counts.items),
-        output.collectibles.first(counts.collectibles),
-        output.materialRequirementSets.first(counts.materialRequirementSets),
-        output.itemDetails.first(counts.itemDetails),
-        output.socketPlugRules.first(counts.socketPlugRules),
-        output.socketPlugPools.first(counts.socketPlugPools),
-        output.socketPlugMembers.first(counts.socketPlugMembers),
-        output.inventoryBuckets.first(counts.inventoryBuckets),
-        output.socketEntryLists.first(counts.socketEntryLists),
-        output.socketEntryTables.first(counts.socketEntryTables),
-        output.abilityBuckets.first(counts.abilityBuckets),
-        output.progressions.first(counts.progressions),
-        output.scenarios.first(counts.scenarios),
-        output.rosterGroups.first(counts.rosterGroups),
-        output.spawnStems.first(counts.spawnStems),
-        output.spawnNameHashes.first(counts.spawnNameHashes),
-        output.spawnPoints.first(counts.spawnPoints),
-        output.hashNames.first(counts.hashNames),
-        output.entityNames.first(counts.entityNames),
-        output.vendorIndex.first(counts.vendorIndex),
-        output.vendorDefinitions.first(counts.vendorDefinitions),
-        output.vendorSaleRows.first(counts.vendorSaleRows),
-        output.vendorInstalledRows.first(counts.vendorInstalledRows),
-    });
+
+    return records::valid_domains(
+        build,
+        {
+            constants,
+            output.named.first(counts.named),
+            output.items.first(counts.items),
+            output.collectibles.first(counts.collectibles),
+            output.materialRequirementSets.first(counts.materialRequirementSets),
+            output.itemDetails.first(counts.itemDetails),
+            output.socketPlugRules.first(counts.socketPlugRules),
+            output.socketPlugPools.first(counts.socketPlugPools),
+            output.socketPlugMembers.first(counts.socketPlugMembers),
+            output.exoticCatalysts.first(counts.exoticCatalysts),
+            output.inventoryBuckets.first(counts.inventoryBuckets),
+            output.socketEntryLists.first(counts.socketEntryLists),
+            output.socketEntryTables.first(counts.socketEntryTables),
+            output.abilityBuckets.first(counts.abilityBuckets),
+            output.progressions.first(counts.progressions),
+            output.scenarios.first(counts.scenarios),
+            output.rosterGroups.first(counts.rosterGroups),
+            output.spawnStems.first(counts.spawnStems),
+            output.spawnNameHashes.first(counts.spawnNameHashes),
+            output.spawnPoints.first(counts.spawnPoints),
+            output.hashNames.first(counts.hashNames),
+            output.entityNames.first(counts.entityNames),
+            output.vendorIndex.first(counts.vendorIndex),
+            output.vendorDefinitions.first(counts.vendorDefinitions),
+            output.vendorSaleRows.first(counts.vendorSaleRows),
+            output.vendorInstalledRows.first(counts.vendorInstalledRows),
+        });
 }
 
 } // namespace sunrise::state::build_data::cache::read
