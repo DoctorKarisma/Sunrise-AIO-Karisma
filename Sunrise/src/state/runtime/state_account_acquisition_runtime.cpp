@@ -109,8 +109,11 @@ bool prepare_item_acquisition(std::uint16_t collectibleIndex,
     family4_loadout::ResolvedLoadout resolved{};
     std::uint16_t inventoryRow = 0;
     std::uint8_t equipmentSlot = 0;
-    if (!account::valid(candidate) || identity_uses_soid(candidate, instanceSoid)
-        || !family4_loadout::resolve(candidate, characterIndex, resolved)
+
+    // The SOID was already verified as unique by next_item_instance_soid(account, ...).
+    // At this point the new item is intentionally present in candidate, so checking
+    // identity_uses_soid(candidate, instanceSoid) here would always report a collision.
+    if (!account::valid(candidate) || !family4_loadout::resolve(candidate, characterIndex, resolved)
         || !find_acquired_row(resolved, instanceSoid, inventoryRow, equipmentSlot)) {
         report_acquisition("prepare",
                            "fail",
@@ -253,6 +256,7 @@ bool commit_item_acquisition(PendingItemAcquisition& mutation) noexcept {
         ReleaseSRWLockExclusive(&runtime::storage::g_stateLock);
         return fail("account");
     }
+
     CharacterState& character = candidate.characters[prepared.characterIndex];
     if (!character.selected || character.soid != prepared.characterSoid
         || !same_character(character, prepared.beforeCharacter)) {
@@ -263,19 +267,24 @@ bool commit_item_acquisition(PendingItemAcquisition& mutation) noexcept {
     candidate.profileItems = prepared.afterProfileItems;
     candidate.profileItemCount = prepared.afterProfileItemCount;
     character = prepared.afterCharacter;
+
     family4_loadout::ResolvedLoadout resolved{};
     std::uint16_t checkedRow = 0;
     std::uint8_t checkedSlot = 0;
+
+    // The prepared item is intentionally already part of candidate here.
+    // Its uniqueness was established before insertion by next_item_instance_soid().
     if (!account::valid(candidate) || !valid_profile_inventory(candidate)
-        || identity_uses_soid(candidate, prepared.acquiredInstanceSoid)
         || !family4_loadout::resolve(candidate, prepared.characterIndex, resolved)
         || !find_acquired_row(resolved, prepared.acquiredInstanceSoid, checkedRow, checkedSlot)
         || checkedRow != prepared.inventoryRow || checkedSlot != prepared.equipmentSlot) {
         ReleaseSRWLockExclusive(&runtime::storage::g_stateLock);
         return fail("resolve");
     }
+
     runtime::storage::g_state.account = candidate;
     ReleaseSRWLockExclusive(&runtime::storage::g_stateLock);
+
     report_acquisition("commit_end",
                        "ok",
                        "published",
@@ -286,6 +295,7 @@ bool commit_item_acquisition(PendingItemAcquisition& mutation) noexcept {
                        prepared.inventoryRow,
                        prepared.equipmentSlot,
                        prepared.afterCharacter.nextInventorySerial);
+
     // Persisted only once the mutation is committed, so a refused one never reaches the file.
     persistence::save();
     return true;
@@ -301,6 +311,7 @@ bool prepare_profile_item_acquisition(std::uint16_t collectibleIndex,
     build_data::items::Definition item{};
     item_details::Definition detail{};
     inventory_buckets::Descriptor bucket{};
+
     if (definitionHash == authored_inventory::kNoDefinitionHash || !account::valid(account)
         || !valid_profile_inventory(account)
         || !build_data::find_collectible_definition(collectibleIndex, collectible)
@@ -330,6 +341,7 @@ bool prepare_profile_item_acquisition(std::uint16_t collectibleIndex,
                                    false);
         return false;
     }
+
     AccountState chargedAccount{};
     bool materialsChanged = false;
     if (!apply_collection_materials(account, collectible, chargedAccount, materialsChanged)) {
@@ -347,7 +359,9 @@ bool prepare_profile_item_acquisition(std::uint16_t collectibleIndex,
                                    false);
         return false;
     }
+
     (void)materialsChanged;
+
     const bool actionSource =
         build_data::is_profile_action_source(item.definitionIndex, item.bucketId);
 
@@ -356,15 +370,19 @@ bool prepare_profile_item_acquisition(std::uint16_t collectibleIndex,
     std::int32_t previousMutationSerial = 0;
     std::int32_t greatestMutationSerial = 0;
     bool appended = true;
+
     for (std::size_t index = 0; index < chargedAccount.profileItemCount; ++index) {
         greatestMutationSerial =
             (std::max)(greatestMutationSerial, chargedAccount.profileItems[index].mutationSerial);
     }
+
     for (std::size_t index = 0; index < chargedAccount.profileItemCount; ++index) {
         const authored_inventory::ProfileItem& existing = chargedAccount.profileItems[index];
+
         if (existing.definitionHash != definitionHash) {
             continue;
         }
+
         if (existing.quantity > detail.maxStackSize) {
             report_profile_acquisition("prepare",
                                        "fail",
@@ -380,6 +398,7 @@ bool prepare_profile_item_acquisition(std::uint16_t collectibleIndex,
                                        false);
             return false;
         }
+
         if (appended && existing.quantity < detail.maxStackSize) {
             profileIndex = index;
             previousQuantity = existing.quantity;
@@ -387,6 +406,7 @@ bool prepare_profile_item_acquisition(std::uint16_t collectibleIndex,
             appended = false;
         }
     }
+
     if (greatestMutationSerial == (std::numeric_limits<std::int32_t>::max)()
         || (appended && chargedAccount.profileItemCount >= chargedAccount.profileItems.size())) {
         report_profile_acquisition(
@@ -407,6 +427,7 @@ bool prepare_profile_item_acquisition(std::uint16_t collectibleIndex,
 
     std::uint64_t acquiredInstanceSoid =
         appended ? 0 : chargedAccount.profileItems[profileIndex].instanceSoid;
+
     if (actionSource != (acquiredInstanceSoid != 0) && !appended) {
         report_profile_acquisition("prepare",
                                    "fail",
@@ -422,6 +443,7 @@ bool prepare_profile_item_acquisition(std::uint16_t collectibleIndex,
                                    false);
         return false;
     }
+
     if (appended && actionSource
         && !next_profile_item_instance_soid(chargedAccount, acquiredInstanceSoid)) {
         report_profile_acquisition("prepare",
@@ -441,6 +463,7 @@ bool prepare_profile_item_acquisition(std::uint16_t collectibleIndex,
 
     AccountState after = chargedAccount;
     const std::int32_t acquiredMutationSerial = greatestMutationSerial + 1;
+
     if (appended) {
         after.profileItems[profileIndex] = {
             acquiredInstanceSoid, definitionHash, 1, acquiredMutationSerial};
@@ -449,7 +472,9 @@ bool prepare_profile_item_acquisition(std::uint16_t collectibleIndex,
         ++after.profileItems[profileIndex].quantity;
         after.profileItems[profileIndex].mutationSerial = acquiredMutationSerial;
     }
+
     const std::int32_t acquiredQuantity = after.profileItems[profileIndex].quantity;
+
     if (after.profileItems[profileIndex].instanceSoid != acquiredInstanceSoid
         || acquiredQuantity <= previousQuantity || acquiredQuantity > detail.maxStackSize
         || !account::valid(after) || !valid_profile_inventory(after)) {
@@ -487,6 +512,7 @@ bool prepare_profile_item_acquisition(std::uint16_t collectibleIndex,
     mutation.actionSource = actionSource;
     mutation.appended = appended;
     mutation.prepared = true;
+
     if (!valid_profile_mutation_shape(mutation)) {
         mutation = {};
         report_profile_acquisition("prepare",
@@ -503,6 +529,7 @@ bool prepare_profile_item_acquisition(std::uint16_t collectibleIndex,
                                    appended);
         return false;
     }
+
     report_profile_acquisition("prepare",
                                "ok",
                                "ready",
@@ -524,6 +551,7 @@ bool preview_profile_item_acquisition(const PendingProfileItemAcquisition& mutat
     after = {};
     const AccountState current = account_snapshot();
     const bool ready = materialize_profile_acquisition(current, mutation, after);
+
     report_profile_acquisition("preview",
                                ready ? "ok" : "fail",
                                ready ? "ready" : "stale_or_invalid",
@@ -543,6 +571,7 @@ bool preview_profile_item_acquisition(const PendingProfileItemAcquisition& mutat
 bool commit_profile_item_acquisition(PendingProfileItemAcquisition& mutation) noexcept {
     const PendingProfileItemAcquisition prepared = mutation;
     mutation = {};
+
     if (!valid_profile_mutation_shape(prepared)) {
         report_profile_acquisition("commit",
                                    "fail",
@@ -563,10 +592,13 @@ bool commit_profile_item_acquisition(PendingProfileItemAcquisition& mutation) no
     AccountState candidate{};
     const bool ready =
         materialize_profile_acquisition(runtime::storage::g_state.account, prepared, candidate);
+
     if (ready) {
         runtime::storage::g_state.account = candidate;
     }
+
     ReleaseSRWLockExclusive(&runtime::storage::g_stateLock);
+
     report_profile_acquisition("commit",
                                ready ? "ok" : "fail",
                                ready ? "published" : "stale_or_invalid",
@@ -579,10 +611,12 @@ bool commit_profile_item_acquisition(PendingProfileItemAcquisition& mutation) no
                                prepared.previousQuantity,
                                prepared.acquiredQuantity,
                                prepared.appended);
+
     // Persisted only once the mutation is committed, so a refused one never reaches the file.
     if (ready) {
         persistence::save();
     }
+
     return ready;
 }
 
@@ -608,7 +642,7 @@ constexpr std::array<std::uint32_t, authored_inventory::kEmoteCollectionSocketLa
     kEmoteCollectionDefaultPlugHashes{
         SweepingDefinitionHash,             // lane 0 -- top
         kLuxuriousToastEmoteDefinitionHash, // lane 1 -- bottom
-        kGoodDoggoDefinitionHash,      // lane 2 -- left
+        kGoodDoggoDefinitionHash,           // lane 2 -- left
         kSelfieDefinitionHash,              // lane 3 -- right
     };
 
@@ -617,12 +651,13 @@ constexpr std::array<std::uint32_t, authored_inventory::kEmoteCollectionSocketLa
  * is only read to validate the definition, so it stays local rather than reaching the caller.
  * @param definition Receives the matching native item-definition row.
  * @return True only when both rows agree with each other, carry no native equipment slot (the one
- *         trait that singles this item out among every character-scoped item), and declare exactly
- *         the expected 4 ordinary socket lanes.
+ * trait that singles this item out among every character-scoped item), and declare exactly
+ * the expected 4 ordinary socket lanes.
  */
 [[nodiscard]] bool
 resolve_emote_collection_definition(build_data::items::Definition& definition) noexcept {
     item_details::Definition detail{};
+
     return build_data::find_item_definition_hash(authored_inventory::kEmoteCollectionDefinitionHash,
                                                  definition)
            && definition.definitionHash == authored_inventory::kEmoteCollectionDefinitionHash
@@ -641,6 +676,7 @@ resolve_emote_collection_definition(build_data::items::Definition& definition) n
 [[nodiscard]] bool default_plugs_valid(std::uint16_t collectionDefinitionIndex) noexcept {
     for (std::size_t lane = 0; lane < kEmoteCollectionDefaultPlugHashes.size(); ++lane) {
         build_data::items::Definition plugDefinition{};
+
         if (!build_data::find_item_definition_hash(kEmoteCollectionDefaultPlugHashes[lane],
                                                    plugDefinition)
             || !build_data::is_socket_plug_allowed(collectionDefinitionIndex,
@@ -649,6 +685,7 @@ resolve_emote_collection_definition(build_data::items::Definition& definition) n
             return false;
         }
     }
+
     return true;
 }
 
@@ -662,9 +699,11 @@ resolve_emote_collection_definition(build_data::items::Definition& definition) n
         || item.sockets.plugCount != authored_inventory::kEmoteCollectionSocketLaneCount) {
         return false;
     }
+
     for (std::size_t lane = 0; lane < authored_inventory::kEmoteCollectionSocketLaneCount; ++lane) {
         const std::optional<std::uint32_t>& plugHash = item.sockets.plugs[lane];
         build_data::items::Definition plugDefinition{};
+
         if (!plugHash.has_value()
             || !build_data::find_item_definition_hash(*plugHash, plugDefinition)
             || !build_data::is_socket_plug_allowed(collectionDefinitionIndex,
@@ -673,6 +712,7 @@ resolve_emote_collection_definition(build_data::items::Definition& definition) n
             return false;
         }
     }
+
     return true;
 }
 
@@ -699,6 +739,7 @@ EmoteCollectionOutcome ensure_character_emote_collection() noexcept {
         || !build_data::socket_plug_rules_ready()) {
         return EmoteCollectionOutcome::notReady;
     }
+
     // With those published, an item that still does not resolve this way is a build that cannot
     // carry the wheel at all. Retrying that within this process would never change the answer.
     build_data::items::Definition collectionDefinition{};
@@ -709,69 +750,88 @@ EmoteCollectionOutcome ensure_character_emote_collection() noexcept {
 
     AcquireSRWLockExclusive(&runtime::storage::g_stateLock);
     AccountState candidate = runtime::storage::g_state.account;
+
     if (!account::valid(candidate)) {
         ReleaseSRWLockExclusive(&runtime::storage::g_stateLock);
         return EmoteCollectionOutcome::notReady;
     }
+
     bool changed = false;
     bool failed = false;
+
     for (std::size_t characterIndex = 0; characterIndex < candidate.characterCount && !failed;
          ++characterIndex) {
         CharacterState& character = candidate.characters[characterIndex];
         auto& collectionSlot = character.equipment.slots[kEmoteCollectionSlot];
+
         const bool present =
             collectionSlot.has_value()
             && collectionSlot->definitionHash == authored_inventory::kEmoteCollectionDefinitionHash;
+
         if (present && socket_state_sound(*collectionSlot, collectionDefinition.definitionIndex)) {
             continue;
         }
+
         if (character.nextInventorySerial
             >= static_cast<std::uint32_t>((std::numeric_limits<std::int32_t>::max)())) {
             failed = true;
             break;
         }
+
         // A repair owns only the definition, the sockets and the serial. Everything else the item
         // already carries, the accumulated item-state flags above all, belongs to the player and
         // survives. The account was checked whole on entry, so a present item's remaining scalars
         // are already known good and need no normalizing here.
         authored_inventory::Item granted = present ? *collectionSlot : authored_inventory::Item{};
+
         if (!present) {
             std::uint64_t instanceSoid = 0;
+
             if (!next_item_instance_soid(candidate, instanceSoid)) {
                 failed = true;
                 break;
             }
+
             granted.instanceSoid = instanceSoid;
             granted.level = 0;
             granted.quantity = 1;
         }
+
         granted.definitionHash = authored_inventory::kEmoteCollectionDefinitionHash;
         granted.mutationSerial = static_cast<std::int32_t>(character.nextInventorySerial++);
+
         // Replaced whole rather than edited: the lanes past the used prefix have to be empty for
         // the socket block to validate, whatever the malformed copy left behind.
         granted.sockets = authored_inventory::Sockets{};
         granted.sockets.policy = authored_inventory::SocketPolicy::authored;
         granted.sockets.plugCount = kEmoteCollectionDefaultPlugHashes.size();
+
         for (std::size_t lane = 0; lane < kEmoteCollectionDefaultPlugHashes.size(); ++lane) {
             granted.sockets.plugs[lane] = kEmoteCollectionDefaultPlugHashes[lane];
         }
+
         collectionSlot = granted;
         changed = true;
     }
+
     if (failed) {
         ReleaseSRWLockExclusive(&runtime::storage::g_stateLock);
         return EmoteCollectionOutcome::failed;
     }
+
     if (!changed) {
         ReleaseSRWLockExclusive(&runtime::storage::g_stateLock);
         return EmoteCollectionOutcome::ready;
     }
+
     if (!account::valid(candidate)) {
         ReleaseSRWLockExclusive(&runtime::storage::g_stateLock);
         return EmoteCollectionOutcome::failed;
     }
+
     runtime::storage::g_state.account = candidate;
     ReleaseSRWLockExclusive(&runtime::storage::g_stateLock);
+
     return EmoteCollectionOutcome::ready;
 }
 
