@@ -2,6 +2,14 @@
 
 This is a community-maintained all-in-one build of Sunrise, combining the latest changes from the upstream repositories with additional features and improvements.
 
+## Bugs Disclaimer
+If you encounter any bugs while using this build, please do not report them to the official Sunrise staff. This is an unofficial release containing changes and features that may or may not be added to Sunrise in the future.
+
+## [Please report any issues with this build here, NOT on Discord, and I will do my best to resolve them.](https://github.com/DoctorKarisma/Sunrise-AIO-Karisma/issues)
+
+If you encounter this error while using the DLL, delete the Sunrise folder located in \bin\x64. Back up the folder first if you have anything you want to keep.
+<img width="402" height="170" alt="error" src="https://github.com/user-attachments/assets/71b2f4f3-ed5e-41a6-93ed-3833921caeb2" />
+
 -------------------------------------------------
 
 # Sunrise
