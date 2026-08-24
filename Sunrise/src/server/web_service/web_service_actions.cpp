@@ -9,6 +9,7 @@
 #include <span>
 #include <string_view>
 
+#include "../../client/hooks/vendor_banner/vendor_banner_retire.h"
 #include "../../core/filesystem/path.h"
 #include "../../core/logging/log.h"
 #include "../../core/settings/rule_text.h"
@@ -1455,13 +1456,28 @@ void acquire_quest(const middleware::web_service::Message& message, Outcome& out
     }
     // The reputation turn-in arrives on opcode 904, not 901: it is the quest-acquire path that
     // carries it, along with every other behaviour a row can hold.
-    (void)settle_vendor_row(message,
-                            quest::kOpcode,
-                            request.vendorIndex,
-                            row,
-                            questCategoryIndex,
-                            itemDefinitionIndex,
-                            outcome);
+    const RowOutcome settled = settle_vendor_row(message,
+                                                 quest::kOpcode,
+                                                 request.vendorIndex,
+                                                 row,
+                                                 questCategoryIndex,
+                                                 itemDefinitionIndex,
+                                                 outcome);
+    // Only a row that handed over the quest it offered answers the banner. A reputation credit leaves
+    // the banner's own question unanswered, so it stays up.
+    if (settled != RowOutcome::granted) {
+        return;
+    }
+    // The banner that offered this quest has now been answered, and nothing else tells the client
+    // so: its picker keeps choosing the same interaction for as long as the quest is offerable.
+    // Retiring it here, exactly where the shipped game appends its own entry, lets the next
+    // interaction take the screen.
+    if (request.vendorIndex >= 0
+        && request.vendorIndex
+               < static_cast<std::int32_t>(client::hooks::vendor_banner::kVendorCapacity)) {
+        (void)client::hooks::vendor_banner::suppress_current(
+            static_cast<std::uint16_t>(request.vendorIndex));
+    }
 }
 
 /**

@@ -240,6 +240,7 @@
     <ClCompile Include="src\client\hooks\world_speed\world_speed.cpp" />
     <ClCompile Include="src\client\input\window_focus.cpp" />
     <ClCompile Include="src\client\hooks\teleport\teleport_lifecycle.cpp" />
+    <ClCompile Include="src\client\hooks\vendor_banner\vendor_banner_retire.cpp" />
     <ClCompile Include="src\client\hooks\teleport\teleport_move.cpp" />
     <ClCompile Include="src\client\hooks\teleport\teleport_action_key.cpp" />
     <ClCompile Include="src\client\hooks\spawn\spawn_runtime.cpp" />
@@ -960,6 +961,7 @@
     <ClInclude Include="src\client\hooks\world_speed\world_speed.h" />
     <ClInclude Include="src\client\input\window_focus.h" />
     <ClInclude Include="src\client\hooks\teleport\internal.h" />
+    <ClInclude Include="src\client\hooks\vendor_banner\vendor_banner_retire.h" />
     <ClInclude Include="src\client\hooks\teleport\runtime.h" />
     <ClInclude Include="src\client\hooks\spawn\spawn_runtime.h" />
     <ClInclude Include="src\client\ui\movement\movement_panel.h" />

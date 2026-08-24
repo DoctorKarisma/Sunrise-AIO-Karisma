@@ -32,6 +32,7 @@
 #include "../hooks/spawn/spawn_runtime.h"
 #include "../hooks/teleport/runtime.h"
 #include "../hooks/world_speed/world_speed.h"
+#include "../hooks/vendor_banner/vendor_banner_retire.h"
 #include "../patterns/registry.h"
 #include "../targets/game.h"
 #include "internal.h"
@@ -168,6 +169,7 @@ void clear_game_targets() noexcept {
                                  : "ev=activate stage=package_keys result=fail");
     // Diagnostic capture reports its own outcome and never demotes this stage.
     (void)hooks::retail_log::install();
+    (void)hooks::vendor_banner::install();
     (void)hooks::assert_handler::install();
     (void)hooks::config_getter::install();
     // Boot-step fixes scan for their own single-site targets; each reports its own outcome.
