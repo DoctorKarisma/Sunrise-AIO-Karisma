@@ -34,17 +34,17 @@ constexpr float kNavigationWidth = 180.0F;
 constexpr float kAutomaticWidth = 0.0F;
 /** A half-axis pivot centers the window on both viewport axes. */
 constexpr ImVec2 kCenterPivot{0.5F, 0.5F};
+/** Bottom-right area reserved for Dear ImGui's resize grip. */
+constexpr float kResizeGripExtent = 20.0F;
 
 /**
- * The main surface is draggable but does not use Dear ImGui's saved settings.
+ * The main surface is draggable and resizable but does not use Dear ImGui's saved settings.
  *
- * Position is kept only for the current game session. This means every fresh
- * game launch starts with the menu centered, while closing and reopening the
- * menu during that same session keeps the position where the user dragged it.
+ * The normal fitted menu size is the minimum. Users may enlarge the menu by dragging the
+ * bottom-right resize grip.
  */
 constexpr ImGuiWindowFlags kMainWindowFlags =
-    ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings
-    | ImGuiWindowFlags_NoTitleBar;
+    ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoTitleBar;
 
 /** One trailing null byte turns a descriptor name into a component label. */
 constexpr std::size_t kLabelTerminatorBytes = 1;
@@ -70,11 +70,20 @@ constexpr char kTitle[] = "SUNRISE";
 /**
  * Session-only menu position.
  *
- * This intentionally lives only in memory. It is not written to an ImGui
- * settings file, so the menu starts centered again on a fresh game launch.
+ * This intentionally lives only in memory. It is not written to an ImGui settings file, so the
+ * menu starts centered again on a fresh game launch.
  */
 ImVec2 g_menuPosition{};
 bool g_menuPositionInitialized = false;
+
+/**
+ * Session-only menu size.
+ *
+ * The first opening starts at the normal authored/fitted size. A user resize is remembered while
+ * Sunrise remains loaded, but no size is written to disk.
+ */
+ImVec2 g_menuSize{};
+bool g_menuSizeInitialized = false;
 
 /**
  * Copies one display name into null-terminated component storage.
@@ -89,7 +98,11 @@ component_label(const modules::Descriptor& descriptor) noexcept {
 }
 
 /**
- * Works out a centered size that fits the viewport and the authored minimums.
+ * Works out the normal menu size that fits the active viewport.
+ *
+ * On a large enough viewport this is the authored 920x580 size. On smaller viewports the same
+ * existing fallback is retained so Sunrise never demands a window larger than the game surface.
+ *
  * @param viewport Active Dear ImGui viewport.
  * @return Main window size, or zero axes when the viewport is not ready.
  */
@@ -110,6 +123,19 @@ component_label(const modules::Descriptor& descriptor) noexcept {
 
     return {(std::min)(scaling::dpi::pixels(kPreferredWindowWidth), availableWidth),
             (std::min)(scaling::dpi::pixels(kPreferredWindowHeight), availableHeight)};
+}
+
+/**
+ * Returns the largest menu size that still leaves the authored margin around the viewport.
+ *
+ * @param viewport Active Dear ImGui viewport.
+ * @return Maximum resizable dimensions.
+ */
+[[nodiscard]] ImVec2 maximum_window_size(const ImGuiViewport& viewport) noexcept {
+    const float margin = scaling::dpi::pixels(kViewportMargin);
+
+    return {(std::max)(viewport.Size.x - (margin * kViewportMarginCount), 0.0F),
+            (std::max)(viewport.Size.y - (margin * kViewportMarginCount), 0.0F)};
 }
 
 /**
@@ -168,7 +194,7 @@ void draw_title() noexcept {
 
 } // namespace
 
-/** Draws the Sunrise surface with session-only draggable positioning. */
+/** Draws the Sunrise surface with session-only draggable positioning and resizing. */
 bool render(bool visible) noexcept {
     if (!internal::context_is_current()) {
         return false;
@@ -180,9 +206,15 @@ bool render(bool visible) noexcept {
         return false;
     }
 
-    const ImVec2 size = window_size(*viewport);
+    const ImVec2 minimumSize = window_size(*viewport);
 
-    if (size.x <= 0.0F || size.y <= 0.0F) {
+    if (minimumSize.x <= 0.0F || minimumSize.y <= 0.0F) {
+        return false;
+    }
+
+    const ImVec2 maximumSize = maximum_window_size(*viewport);
+
+    if (maximumSize.x < minimumSize.x || maximumSize.y < minimumSize.y) {
         return false;
     }
 
@@ -200,14 +232,30 @@ bool render(bool visible) noexcept {
     const float scale = kOpeningScale + ((kOpenScale - kOpeningScale) * progress);
 
     /*
+     * The first opening starts at the normal menu size. After the user resizes the menu, that
+     * larger size remains in memory for later closes/reopens during the same game session.
+     */
+    if (!g_menuSizeInitialized) {
+        g_menuSize = minimumSize;
+        g_menuSizeInitialized = true;
+    }
+
+    /*
+     * A viewport or resolution change can make a previously enlarged menu too large. Clamp the
+     * remembered size back into the currently valid range while never allowing it below the
+     * normal fitted menu dimensions.
+     */
+    g_menuSize.x = (std::clamp)(g_menuSize.x, minimumSize.x, maximumSize.x);
+    g_menuSize.y = (std::clamp)(g_menuSize.y, minimumSize.y, maximumSize.y);
+
+    /*
      * First opening of the current session:
      * center the menu.
      *
-     * After that, g_menuPosition is retained and used when the menu is
-     * reopened, so closing the menu does not reset its position.
+     * After that, g_menuPosition is retained and used when the menu is reopened.
      */
     if (!g_menuPositionInitialized) {
-        const ImVec2 scaledSize{size.x * scale, size.y * scale};
+        const ImVec2 scaledSize{g_menuSize.x * scale, g_menuSize.y * scale};
 
         g_menuPosition = {
             viewport->GetCenter().x - (scaledSize.x * kCenterPivot.x),
@@ -218,7 +266,20 @@ bool render(bool visible) noexcept {
     }
 
     ImGui::SetNextWindowPos(g_menuPosition, ImGuiCond_Always);
-    ImGui::SetNextWindowSize({size.x * scale, size.y * scale}, ImGuiCond_Always);
+
+    /*
+     * While opening, retain the existing slight size-growth animation. Once fully open, stop
+     * forcing the window dimensions so Dear ImGui's normal resize grip can control the size.
+     */
+    if (progress < kOpenScale) {
+        ImGui::SetNextWindowSize({g_menuSize.x * scale, g_menuSize.y * scale}, ImGuiCond_Always);
+
+        ImGui::SetNextWindowSizeConstraints({minimumSize.x * scale, minimumSize.y * scale},
+                                            maximumSize);
+    } else {
+        ImGui::SetNextWindowSizeConstraints(minimumSize, maximumSize);
+        ImGui::SetNextWindowSize(g_menuSize, ImGuiCond_FirstUseEver);
+    }
 
     // One style alpha fades the surface and everything drawn inside it together.
     ImGui::PushStyleVar(ImGuiStyleVar_Alpha, progress);
@@ -226,18 +287,40 @@ bool render(bool visible) noexcept {
     const bool submitContents = ImGui::Begin("Sunrise", nullptr, kMainWindowFlags);
 
     /*
-     * The entire window is a drag surface.
+     * Keep the existing whole-window drag behavior, except inside the bottom-right resize area.
      *
-     * ImGui::IsWindowHovered() means the mouse must be over the Sunrise
-     * window, but it does not create an invisible widget over the controls.
-     * Existing buttons, sliders, checkboxes, etc. therefore continue to work.
+     * This allows the menu to remain draggable the same way it was before while preventing the
+     * custom movement code from fighting Dear ImGui when the resize grip is being dragged.
      */
-    if (ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem)
+    const ImVec2 windowPosition = ImGui::GetWindowPos();
+    const ImVec2 windowSize = ImGui::GetWindowSize();
+    const ImVec2 mousePosition = ImGui::GetMousePos();
+
+    const float resizeGripExtent = scaling::dpi::pixels(kResizeGripExtent);
+
+    const bool mouseInResizeGrip =
+        mousePosition.x >= windowPosition.x + windowSize.x - resizeGripExtent
+        && mousePosition.y >= windowPosition.y + windowSize.y - resizeGripExtent;
+
+    const bool resizing = mouseInResizeGrip && ImGui::IsMouseDragging(ImGuiMouseButton_Left);
+
+    if (!resizing && ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem)
         && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
         const ImVec2 mouseDelta = ImGui::GetIO().MouseDelta;
 
         g_menuPosition.x += mouseDelta.x;
         g_menuPosition.y += mouseDelta.y;
+    }
+
+    /*
+     * Once fully open, remember any dimensions chosen using the resize grip.
+     * Opening-animation dimensions are deliberately not recorded.
+     */
+    if (progress >= kOpenScale) {
+        const ImVec2 currentSize = ImGui::GetWindowSize();
+
+        g_menuSize.x = (std::clamp)(currentSize.x, minimumSize.x, maximumSize.x);
+        g_menuSize.y = (std::clamp)(currentSize.y, minimumSize.y, maximumSize.y);
     }
 
     if (submitContents) {
