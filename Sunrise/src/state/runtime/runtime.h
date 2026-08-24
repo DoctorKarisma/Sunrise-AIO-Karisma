@@ -136,6 +136,15 @@ struct PendingItemAcquisition {
     bool prepared{};
 };
 
+/** One profile row an exchange changed, named the way the account's change ring names it. */
+struct ProfileStackChange {
+    std::int32_t mutationSerial{};
+    std::int32_t afterQuantity{};
+};
+
+/** Rows one exchange may announce. Shader recycling announces two: Glimmer and Legendary Shards. */
+inline constexpr std::size_t kProfileStackChangeCapacity = 4;
+
 /** Prepared account-profile stack insertion kept private until its reply and account upsert fit. */
 struct PendingProfileItemAcquisition {
     /** Exact profile inventory observed while preparing the mutation. */
@@ -159,6 +168,14 @@ struct PendingProfileItemAcquisition {
     std::uint16_t collectibleIndex{};
     std::uint8_t bucketId{};
     std::uint8_t materialRequirementCount{};
+    /**
+     * Rows this mutation announces to the account's change ring, which is what draws the floating
+     * "+5 Legendary Shards" the Client shows. Empty for an ordinary acquisition, which announces
+     * its one acquired row instead; non-empty marks this an exchange, whose quantities move by
+     * more than one and whose row count is not fixed at one.
+     */
+    std::array<ProfileStackChange, kProfileStackChangeCapacity> changes{};
+    std::size_t changeCount{};
     /** True only for installed profile mod/shader rows materialized as Family-4 residents. */
     bool actionSource{};
     bool appended{};
@@ -500,6 +517,41 @@ insert_item_definition_unrestricted(std::uint32_t definitionHash,
 
 /** Commits one prepared item-state change behind an exact full-character staleness guard. */
 [[nodiscard]] bool commit_item_state(PendingItemState& mutation) noexcept;
+
+/** One credited side of a vendor exchange: an authored profile stack and how much to add. */
+struct ProfileExchangePayout {
+    std::uint32_t definitionHash{};
+    std::int32_t quantity{};
+};
+
+/**
+ * Prepares one vendor recycle row: charges the stack it names and credits what it pays out.
+ *
+ * This rides the profile-stack mutation rather than writing State directly, because the Client is
+ * only told about a currency gain by the account object's change ring - a row named there is what
+ * draws the floating "+5 Legendary Shards". A direct write with a resync moves the numbers but
+ * announces nothing, so the gain lands silently.
+ *
+ * Every credited row is announced, and each takes a fresh mutation serial so the ring has a unique
+ * row to name. The charged row is not announced: the ring is what reports a gain.
+ *
+ * Only an already-held payout stack is credited. Appending a profile row is the acquisition path's
+ * job, and the currencies a recycle pays into are authored from the start.
+ *
+ * There is deliberately no matching preview or commit. What this prepares is a profile-stack
+ * mutation, so `preview_profile_item_acquisition` and `commit_profile_item_acquisition` carry it
+ * the rest of the way, and it travels the one staging and publishing path they already own.
+ *
+ * @param costDefinitionHash Stack the row charges against.
+ * @param costQuantity Units of it the row consumes.
+ * @param payouts Stacks to credit, each clamped to its own native stack limit.
+ * @param mutation Gets the checked profile before/after images without changing account State.
+ * @return True only when the charge and every credit fit and the whole account stayed valid.
+ */
+[[nodiscard]] bool prepare_vendor_exchange(std::uint32_t costDefinitionHash,
+                                           std::int32_t costQuantity,
+                                           std::span<const ProfileExchangePayout> payouts,
+                                           PendingProfileItemAcquisition& mutation) noexcept;
 
 /** @return A copy of the active account state, read under the lock. */
 [[nodiscard]] AccountState account_snapshot() noexcept;

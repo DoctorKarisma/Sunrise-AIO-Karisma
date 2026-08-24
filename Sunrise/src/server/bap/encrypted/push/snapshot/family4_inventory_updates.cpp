@@ -20,6 +20,122 @@ namespace sunrise::server::bap::encrypted::push::snapshot {
 
 namespace family4_datagen = middleware::datagen::family4;
 
+namespace {
+
+namespace account_layout = middleware::datagen::family4::account::layout;
+
+/**
+ * The change ring the native account observer reads.
+ *
+ * It compares profile quantities but only draws pickup feedback for a row whose mutation serial
+ * also appears here, so a gain the ring does not name lands silently. The bank is local to one
+ * incremental upsert - an ordinary snapshot encodes it empty - while the row's own rising serial
+ * stays persistent State.
+ */
+constexpr std::uint8_t kChangeKind = 1;
+/** Clear policy bits leave the record enabled; the observer skips any other pair. */
+constexpr std::uint16_t kChangeFlags = 0;
+
+/** @return True when the ring carries no record, which is how every snapshot encodes it. */
+[[nodiscard]] bool ring_is_empty(const account_layout::Object& accountObject) noexcept {
+    const auto recordIsZero = [](const account_layout::ProfileInventoryChangeRecord& record) {
+        return record.sequence == 0 && record.reserved == 0 && record.mutationSerial == 0
+               && record.kind == 0 && record.reservedKind == 0 && record.flags == 0;
+    };
+    return accountObject.profileInventoryChanges.writeSlot == 0
+           && accountObject.profileInventoryChanges.nextSequence == 0
+           && std::all_of(accountObject.profileInventoryChanges.records.cbegin(),
+                          accountObject.profileInventoryChanges.records.cend(),
+                          recordIsZero);
+}
+
+/** Points one ring record at one profile row. */
+void name_row(account_layout::ProfileInventoryChangeRecord& record,
+              std::size_t sequence,
+              std::int32_t mutationSerial) noexcept {
+    record.sequence = static_cast<std::uint16_t>(sequence);
+    record.mutationSerial = mutationSerial;
+    record.kind = kChangeKind;
+    record.flags = kChangeFlags;
+}
+
+/**
+ * Names every row an exchange credited, so each gain is drawn and repeats accumulate.
+ *
+ * @param accountObject Encoded account object being upserted.
+ * @param mutation Prepared exchange carrying the rows it credited.
+ * @return Null on success, or the reason the ring could not be written.
+ */
+[[nodiscard]] const char* write_exchange_changes(
+    account_layout::Object& accountObject,
+    const state::PendingProfileItemAcquisition& mutation) noexcept {
+    if (mutation.changeCount > accountObject.profileInventoryChanges.records.size()
+        || !ring_is_empty(accountObject)) {
+        return "exchange_inventory_change_state";
+    }
+    for (std::size_t change = 0; change < mutation.changeCount; ++change) {
+        const state::ProfileStackChange& announced = mutation.changes[change];
+        std::size_t matchedRows = 0;
+        for (const auto& row : accountObject.profileItems) {
+            if (row.mutationSerial != announced.mutationSerial) {
+                continue;
+            }
+            if (row.quantity != announced.afterQuantity) {
+                return "exchange_change_quantity";
+            }
+            ++matchedRows;
+        }
+        if (matchedRows != 1) {
+            return "exchange_change_row";
+        }
+        name_row(accountObject.profileInventoryChanges.records[change],
+                 change,
+                 announced.mutationSerial);
+    }
+    accountObject.profileInventoryChanges.writeSlot =
+        static_cast<std::uint16_t>(mutation.changeCount);
+    accountObject.profileInventoryChanges.nextSequence =
+        static_cast<std::uint16_t>(mutation.changeCount);
+    return nullptr;
+}
+
+/**
+ * Names the one row an ordinary acquisition added to or grew.
+ *
+ * @param accountObject Encoded account object being upserted.
+ * @param mutation Prepared acquisition naming its acquired row.
+ * @param acquiredRow Receives that row's position, for the checkpoint line.
+ * @return Null on success, or the reason the ring could not be written.
+ */
+[[nodiscard]] const char* write_acquisition_change(
+    account_layout::Object& accountObject,
+    const state::PendingProfileItemAcquisition& mutation,
+    std::size_t& acquiredRow) noexcept {
+    acquiredRow = accountObject.profileItems.size();
+    for (std::size_t row = 0; row < accountObject.profileItems.size(); ++row) {
+        if (accountObject.profileItems[row].mutationSerial != mutation.acquiredMutationSerial) {
+            continue;
+        }
+        if (acquiredRow != accountObject.profileItems.size()) {
+            return "profile_acquire_row_duplicate";
+        }
+        acquiredRow = row;
+    }
+    if (acquiredRow >= accountObject.profileItems.size()
+        || accountObject.profileItems[acquiredRow].quantity != mutation.acquiredQuantity
+        || !ring_is_empty(accountObject)) {
+        return "profile_acquire_inventory_change_state";
+    }
+    accountObject.profileInventoryChanges.writeSlot = 1;
+    accountObject.profileInventoryChanges.nextSequence = 1;
+    name_row(accountObject.profileInventoryChanges.records.front(),
+             0,
+             mutation.acquiredMutationSerial);
+    return nullptr;
+}
+
+} // namespace
+
 /** Builds a single full account-object upsert from an uncommitted profile-stack after-image. */
 bool prepare_profile_item_acquisition(Scratch& scratch,
                                       const queuez::ProfileItemAcquisition& acquisition,
@@ -55,51 +171,22 @@ bool prepare_profile_item_acquisition(Scratch& scratch,
         return report_failure("profile_acquire_account_encode");
     }
 
-    // The native account observer compares profile quantities but only emits pickup feedback when
-    // the changed row's mutation serial also appears in this transient 16-record bank at 0x6978.
-    // Keep the descriptor local to this one incremental upsert; ordinary snapshots encode an empty
-    // bank, while the row's rising mutation serial remains persistent State.
-    constexpr std::uint16_t kAcquisitionChangeSequence = 0;
-    constexpr std::uint16_t kAcquisitionChangeNextWriteSlot = 1;
-    constexpr std::uint16_t kAcquisitionChangeNextSequence = 1;
-    constexpr std::uint8_t kAcquisitionChangeKind = 1;
-    constexpr std::uint16_t kAcquisitionChangeFlags = 0;
     auto& accountObject =
         *reinterpret_cast<family4_datagen::account::layout::Object*>(accountBytes.data());
     std::size_t acquiredRow = accountObject.profileItems.size();
-    for (std::size_t row = 0; row < accountObject.profileItems.size(); ++row) {
-        const auto& inventoryRow = accountObject.profileItems[row];
-        if (inventoryRow.mutationSerial != mutation.acquiredMutationSerial) {
-            continue;
-        }
-        if (acquiredRow != accountObject.profileItems.size()) {
-            clear_after(scratch, reservation);
-            return report_failure("profile_acquire_row_duplicate");
-        }
-        acquiredRow = row;
-    }
-    const auto recordIsZero =
-        [](const family4_datagen::account::layout::ProfileInventoryChangeRecord& record) noexcept {
-            return record.sequence == 0 && record.reserved == 0 && record.mutationSerial == 0
-                   && record.kind == 0 && record.reservedKind == 0 && record.flags == 0;
-        };
-    const bool recordsAreZero = std::all_of(accountObject.profileInventoryChanges.records.cbegin(),
-                                            accountObject.profileInventoryChanges.records.cend(),
-                                            recordIsZero);
-    if (acquiredRow >= accountObject.profileItems.size()
-        || accountObject.profileItems[acquiredRow].quantity != mutation.acquiredQuantity
-        || accountObject.profileInventoryChanges.writeSlot != 0
-        || accountObject.profileInventoryChanges.nextSequence != 0 || !recordsAreZero) {
+    // An exchange names every row it credited; an ordinary acquisition names the one row it added
+    // to or grew. Both write the same kind of record, which is what the observer draws.
+    const char* const ringFailure =
+        mutation.changeCount != 0
+            ? write_exchange_changes(accountObject, mutation)
+            : write_acquisition_change(accountObject, mutation, acquiredRow);
+    if (ringFailure != nullptr) {
         clear_after(scratch, reservation);
-        return report_failure("profile_acquire_inventory_change_state");
+        return report_failure(ringFailure);
     }
-    accountObject.profileInventoryChanges.writeSlot = kAcquisitionChangeNextWriteSlot;
-    accountObject.profileInventoryChanges.nextSequence = kAcquisitionChangeNextSequence;
-    auto& acquisitionChange = accountObject.profileInventoryChanges.records.front();
-    acquisitionChange.sequence = kAcquisitionChangeSequence;
-    acquisitionChange.mutationSerial = mutation.acquiredMutationSerial;
-    acquisitionChange.kind = kAcquisitionChangeKind;
-    acquisitionChange.flags = kAcquisitionChangeFlags;
+    const std::uint16_t reportedChangeSlot = accountObject.profileInventoryChanges.writeSlot;
+    const std::uint16_t reportedChangeSequence =
+        accountObject.profileInventoryChanges.nextSequence;
 
     Prepared staged{};
     staged.rawClearSize =
@@ -166,9 +253,9 @@ bool prepare_profile_item_acquisition(Scratch& scratch,
         mutation.acquiredQuantity,
         acquiredRow,
         mutation.acquiredMutationSerial,
-        static_cast<unsigned>(kAcquisitionChangeNextWriteSlot),
-        static_cast<unsigned>(kAcquisitionChangeNextSequence),
-        static_cast<unsigned>(kAcquisitionChangeKind),
+        static_cast<unsigned>(reportedChangeSlot),
+        static_cast<unsigned>(reportedChangeSequence),
+        static_cast<unsigned>(kChangeKind),
         prepared.family.objects[accountObjectIndex].payload.size(),
         objectCount,
         acquisition.appendedResident ? "item-account" : "account");

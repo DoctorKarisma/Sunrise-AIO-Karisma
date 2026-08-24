@@ -45,6 +45,11 @@ constexpr std::uint32_t kUnavailableDefinitionIndex = (std::numeric_limits<std::
 constexpr std::uint32_t kRepeatableHoldLimit = 5;
 /** Authored repeatable pool ceiling. The largest set in the manifest is Eva's Dawning, at 22. */
 constexpr std::size_t kRepeatablePoolCapacity = 64;
+/** Stacks one exchange row may credit. Shader recycling pays two: Glimmer and Legendary Shards. */
+constexpr std::size_t kExchangePayoutCapacity = 4;
+// Every credited stack is announced to the account's change ring, so a rule that named more
+// payouts than the mutation can announce would pay out silently. Raising one raises the other.
+static_assert(kExchangePayoutCapacity <= state::kProfileStackChangeCapacity);
 
 } // namespace
 
@@ -963,6 +968,104 @@ void report_purchase(std::uint16_t opcode,
     return true;
 }
 
+/**
+ * Runs a vendor's recycle row: charges the stack it names and credits what it pays out.
+ *
+ * A recycle row sells a Dummy placeholder like a reputation turn-in does, and the exchange is the
+ * whole point of clicking it. The Drifter's four Synth Recycling rows take five synths each; Master
+ * Rahool's Recycle Shaders category has one row per shader, 277 of them, each taking five of that
+ * shader.
+ *
+ * The cost has to be authored rather than read off the row. The sale row's own cost-bearing fields
+ * are still role-open - the domain header warns against naming one a cost without its mutation
+ * reader - so nothing on this build can say which item a row charges. The manifest can, and a row's
+ * position in it is exactly the row index this build reports: 304 rows checked against Lord Shaxx,
+ * every category in the same order, no mismatch.
+ *
+ * Configured by `vendor_exchange.txt`, one rule per line:
+ * `<vendorDefinitionHash> <rowIndex> <costItemHash> <costQuantity>` then one
+ * `<payoutItemHash> <payoutQuantity>` pair for each stack the row pays into.
+ * Hashes are hex and quantities decimal, alternating, and a rule may name several payouts.
+ *
+ * @param vendorIndex Vendor the purchase names.
+ * @param rowIndex Sale row the purchase names.
+ * @return True when this row was an exchange and its own item must NOT be granted.
+ */
+[[nodiscard]] bool
+exchange_vendor_row(std::int32_t vendorIndex,
+                    std::int32_t rowIndex,
+                    state::PendingProfileItemAcquisition& mutation) noexcept {
+    namespace vendor_domain = state::build_data::vendors;
+    if (vendorIndex < 0 || rowIndex < 0) {
+        return false;
+    }
+    vendor_domain::IndexEntry entry{};
+    if (!vendor_domain::find_index(static_cast<std::uint16_t>(vendorIndex), entry)) {
+        return false;
+    }
+    static std::array<char, core::rule_text::kRuleTextCapacity> text{};
+    if (!core::path::read_artifact_text(L"vendor_exchange.txt", text)) {
+        return false;
+    }
+    std::uint32_t costHash = 0;
+    std::int32_t costQuantity = 0;
+    std::array<state::ProfileExchangePayout, kExchangePayoutCapacity> payouts{};
+    std::size_t payoutCount = 0;
+    bool matched = false;
+    core::rule_text::Cursor rules{text.data()};
+    while (!matched && rules.seek_field()) {
+        const std::uint32_t ruleVendor = rules.read_hex();
+        const std::int32_t ruleRow = rules.read_decimal();
+        const std::uint32_t ruleCost = rules.read_hex();
+        const std::int32_t ruleCostQuantity = rules.read_decimal();
+        // The rest of the line is payout pairs, and every one of them is consumed even past what
+        // can be held. Stopping mid-line would leave the fields that did not fit to be read as the
+        // start of the next rule, turning one over-long rule into a second, invented one.
+        std::array<state::ProfileExchangePayout, kExchangePayoutCapacity> rulePayouts{};
+        std::size_t rulePayoutCount = 0;
+        bool ruleOverflowed = false;
+        while (rules.at_field()) {
+            const std::uint32_t payoutHash = rules.read_hex();
+            const std::int32_t payoutQuantity = rules.read_decimal();
+            if (rulePayoutCount < rulePayouts.size()) {
+                rulePayouts[rulePayoutCount++] = {payoutHash, payoutQuantity};
+            } else {
+                ruleOverflowed = true;
+            }
+        }
+        // A rule naming more payouts than can be credited is refused rather than paid in part,
+        // because paying some of what it promised is worse than saying it was never honoured.
+        matched = !ruleOverflowed && ruleVendor == entry.definitionHash && ruleRow == rowIndex;
+        if (matched) {
+            costHash = ruleCost;
+            costQuantity = ruleCostQuantity;
+            payouts = rulePayouts;
+            payoutCount = rulePayoutCount;
+        }
+    }
+    if (!matched || payoutCount == 0) {
+        return false;
+    }
+    const bool applied = state::prepare_vendor_exchange(
+        costHash, costQuantity,
+        std::span<const state::ProfileExchangePayout>{payouts.data(), payoutCount}, mutation);
+    std::array<char, core::log::kLineCapacity> line{};
+    const int used = std::snprintf(
+        line.data(), line.size(),
+        "ev=vendor_exchange stage=apply result=%s vendor=%d hash=0x%08X row=%d cost=0x%08X "
+        "quantity=%d payouts=%zu",
+        applied ? "ok" : "fail", vendorIndex, entry.definitionHash, rowIndex, costHash,
+        costQuantity, payoutCount);
+    if (used > 0) {
+        core::log::write(core::log::Channel::server,
+                         applied ? core::log::Level::info : core::log::Level::warn,
+                         {line.data(), static_cast<std::size_t>(used)});
+    }
+    // Even a refused exchange owns the row. Falling through would grant the Dummy placeholder,
+    // which is the failure this whole path exists to avoid.
+    return true;
+}
+
 /** Resolves one vendor sale row to the item it sells and the category it belongs to. */
 [[nodiscard]] bool resolve_vendor_row(std::int32_t vendorIndex,
                                       std::int32_t rowIndex,
@@ -1542,6 +1645,8 @@ enum class RowOutcome : std::uint8_t {
     bountyRoll,
     /** The row was a reputation turn-in. */
     reputation,
+    /** The row charged one stack and credited others. */
+    exchange,
     /** The row granted the item it names, or the item it stands for. */
     granted,
 };
@@ -1549,7 +1654,7 @@ enum class RowOutcome : std::uint8_t {
 /**
  * Settles one resolved vendor row, in the order a row's behaviours are tried.
  *
- * Both vendor opcodes end here. A row is one of three things, and which it is cannot be read off the
+ * Both vendor opcodes end here. A row is one of four things, and which it is cannot be read off the
  * row itself - each is recognised by an authored rule keyed to the vendor, so they are tried in
  * turn and the first that claims the row owns it. Keeping that order in one place is what stops the
  * two opcodes drifting: a behaviour taught to one and not the other is the shape of bug this path
@@ -1594,6 +1699,14 @@ RowOutcome settle_vendor_row(const middleware::web_service::Message& message,
         // account graph to be resent.
         outcome.requiresSelfResync = true;
         return RowOutcome::reputation;
+    }
+    state::PendingProfileItemAcquisition exchange{};
+    if (exchange_vendor_row(vendorIndex, rowIndex, exchange)) {
+        report_purchase(opcode, "ok", "exchange", vendorIndex, rowIndex, itemDefinitionIndex);
+        if (exchange.prepared) {
+            outcome.mutation = exchange;
+        }
+        return RowOutcome::exchange;
     }
     // A placeholder row grants what it stands for, not the placeholder: a Dummy item put in the
     // Quests bucket is one the client will not draw, and the row never settles because the player
@@ -1670,8 +1783,9 @@ void acquire_quest(const middleware::web_service::Message& message, Outcome& out
                                                  questCategoryIndex,
                                                  itemDefinitionIndex,
                                                  outcome);
-    // Only a row that handed over the quest it offered answers the banner. A bounty roll and a reputation credit both leave
-    // the banner's own question unanswered, so it stays up.
+    // Only a row that handed over the quest it offered answers the banner. A bounty roll, a
+    // reputation credit and an exchange all leave the banner's own question unanswered, so it
+    // stays up.
     if (settled != RowOutcome::granted) {
         return;
     }
