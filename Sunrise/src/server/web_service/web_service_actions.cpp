@@ -781,6 +781,65 @@ void report_purchase(std::uint16_t opcode,
     }
 }
 
+/**
+ * Answers what a placeholder sale row is really selling.
+ *
+ * Several vendor rows name an item of DestinyItemType 20 - a Dummy, a UI placeholder rather than a
+ * grantable item - because buying the row is meant to hand over something the row does not name.
+ * Amanda Holliday's Legacy Content rows are the clearest case: "Legacy: The Red War" is a dummy in
+ * the Quests bucket standing for the campaign's first quest step, Homecoming. Granting the dummy
+ * puts a placeholder in the player's Quests that the client will not draw, and the row never
+ * settles because the player never receives what it was offering.
+ *
+ * Configured by `vendor_item_substitute.txt`, one rule per line:
+ * `<soldHash> <grantHash>`, both in hex. A rule is keyed by the item a row names, not by the
+ * vendor or the row, so a placeholder
+ * sold by more than one vendor needs one rule rather than one per seller.
+ *
+ * @param itemDefinitionIndex Item the row resolved to.
+ * @param substituteIndex Receives what should be granted in its place.
+ * @return True when a rule names this item and its replacement resolves in this build.
+ */
+[[nodiscard]] bool substitute_for_item(std::uint16_t itemDefinitionIndex,
+                                       std::uint16_t& substituteIndex) noexcept {
+    substituteIndex = kUnavailableDefinitionIndex;
+    state::build_data::items::Definition sold{};
+    if (!state::build_data::find_item_definition_index(itemDefinitionIndex, sold)) {
+        return false;
+    }
+    static std::array<char, core::rule_text::kRuleTextCapacity> text{};
+    if (!core::path::read_artifact_text(L"vendor_item_substitute.txt", text)) {
+        return false;
+    }
+    core::rule_text::Cursor rules{text.data()};
+    while (rules.seek_field()) {
+        const std::uint32_t soldHash = rules.read_hex();
+        const std::uint32_t grantHash = rules.read_hex();
+        if (soldHash != sold.definitionHash) {
+            continue;
+        }
+        state::build_data::items::Definition replacement{};
+        if (!state::build_data::find_item_definition_hash(grantHash, replacement)) {
+            // Named but absent from this build, which is a rule to fix rather than a row to grant
+            // the placeholder for.
+            return false;
+        }
+        substituteIndex = replacement.definitionIndex;
+        std::array<char, core::log::kLineCapacity> line{};
+        const int used = std::snprintf(
+            line.data(), line.size(),
+            "ev=vendor stage=substitute sold=0x%08X granted=0x%08X item=%u",
+            sold.definitionHash, replacement.definitionHash,
+            static_cast<unsigned>(replacement.definitionIndex));
+        if (used > 0) {
+            core::log::write(core::log::Channel::server, core::log::Level::info,
+                             {line.data(), static_cast<std::size_t>(used)});
+        }
+        return true;
+    }
+    return false;
+}
+
 /** Resolves one vendor sale row to the item it sells and the category it belongs to. */
 [[nodiscard]] bool resolve_vendor_row(std::int32_t vendorIndex,
                                       std::int32_t rowIndex,
@@ -1358,7 +1417,7 @@ constexpr std::uint32_t kAbsentNameHash = 0x811C9DC5U;
 enum class RowOutcome : std::uint8_t {
     /** The row was a reputation turn-in. */
     reputation,
-    /** The row granted the item it names. */
+    /** The row granted the item it names, or the item it stands for. */
     granted,
 };
 
@@ -1395,7 +1454,14 @@ RowOutcome settle_vendor_row(const middleware::web_service::Message& message,
         outcome.requiresSelfResync = true;
         return RowOutcome::reputation;
     }
-    const std::uint16_t granted = itemDefinitionIndex;
+    // A placeholder row grants what it stands for, not the placeholder: a Dummy item put in the
+    // Quests bucket is one the client will not draw, and the row never settles because the player
+    // never receives what it offered.
+    std::uint16_t granted = itemDefinitionIndex;
+    std::uint16_t substituteIndex = kUnavailableDefinitionIndex;
+    if (substitute_for_item(granted, substituteIndex)) {
+        granted = substituteIndex;
+    }
     std::uint16_t collectibleIndex = state::build_data::collectibles::kNoCollectibleIndex;
     const bool collected = find_collectible_for_item(granted, collectibleIndex);
     report_purchase(opcode,
