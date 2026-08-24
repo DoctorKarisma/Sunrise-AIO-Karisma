@@ -107,21 +107,36 @@ bool prepare_item_acquisition(std::uint16_t collectibleIndex,
     const AccountState account = account_snapshot();
     build_data::collectibles::Definition collectible{};
     build_data::items::Definition grantedDefinition{};
+    // A vendor purchase names an item, not a collectible, so the collectible steps are skipped
+    // rather than faked. The item is still validated, just by its own hash.
+    const bool hasCollectible = collectibleIndex != build_data::collectibles::kNoCollectibleIndex;
     if (definitionHash == authored_inventory::kNoDefinitionHash || !account::valid(account)
-        || !valid_profile_inventory(account)
-        || !build_data::find_collectible_definition(collectibleIndex, collectible)
-        || collectible.itemDefinitionIndex
-               == build_data::collectibles::kUnavailableItemDefinitionIndex
-        || !build_data::find_item_definition_index(collectible.itemDefinitionIndex,
-                                                   grantedDefinition)
-        || grantedDefinition.definitionHash != definitionHash) {
+        || !valid_profile_inventory(account)) {
         report_acquisition("prepare", "fail", "input", definitionHash, 0, 0, 0, 0, 0, 0);
         return false;
     }
+    if (hasCollectible) {
+        if (!build_data::find_collectible_definition(collectibleIndex, collectible)
+            || collectible.itemDefinitionIndex
+                   == build_data::collectibles::kUnavailableItemDefinitionIndex
+            || !build_data::find_item_definition_index(collectible.itemDefinitionIndex,
+                                                       grantedDefinition)
+            || grantedDefinition.definitionHash != definitionHash) {
+            report_acquisition("prepare", "fail", "input", definitionHash, 0, 0, 0, 0, 0, 0);
+            return false;
+        }
+    } else if (!build_data::find_item_definition_hash(definitionHash, grantedDefinition)
+               || grantedDefinition.definitionHash != definitionHash) {
+        report_acquisition("prepare", "fail", "item", definitionHash, 0, 0, 0, 0, 0, 0);
+        return false;
+    }
 
-    AccountState chargedAccount{};
+    AccountState chargedAccount = account;
     bool profileChanged = false;
-    if (!apply_collection_materials(account, collectible, chargedAccount, profileChanged)) {
+    // Nothing is charged without a collectible: the cost lives on the collectible's material
+    // requirements, and a sale row's own cost fields are still role-open.
+    if (hasCollectible
+        && !apply_collection_materials(account, collectible, chargedAccount, profileChanged)) {
         report_acquisition("prepare", "fail", "materials", definitionHash, 0, 0, 0, 0, 0, 0);
         return false;
     }
@@ -302,13 +317,21 @@ bool commit_item_acquisition(PendingItemAcquisition& mutation) noexcept {
         return fail("mutation");
     }
 
-    build_data::collectibles::Definition collectible{};
-    if (!build_data::find_collectible_definition(prepared.collectibleIndex, collectible)
-        || collectible.itemDefinitionIndex
-               == build_data::collectibles::kUnavailableItemDefinitionIndex
-        || collectible.materialRequirementSetHash != prepared.materialRequirementSetHash
-        || collectible.materialRequirementCount != prepared.materialRequirementCount) {
-        return fail("collectible");
+    // The guard is that prepare and commit agree. Without a collectible they agree on there being
+    // none, which means both cost fields must still be clear.
+    if (prepared.collectibleIndex == build_data::collectibles::kNoCollectibleIndex) {
+        if (prepared.materialRequirementSetHash != 0 || prepared.materialRequirementCount != 0) {
+            return fail("collectible");
+        }
+    } else {
+        build_data::collectibles::Definition collectible{};
+        if (!build_data::find_collectible_definition(prepared.collectibleIndex, collectible)
+            || collectible.itemDefinitionIndex
+                   == build_data::collectibles::kUnavailableItemDefinitionIndex
+            || collectible.materialRequirementSetHash != prepared.materialRequirementSetHash
+            || collectible.materialRequirementCount != prepared.materialRequirementCount) {
+            return fail("collectible");
+        }
     }
 
     report_acquisition("commit_begin",
@@ -381,12 +404,15 @@ bool prepare_profile_item_acquisition(std::uint16_t collectibleIndex,
     inventory_buckets::Descriptor bucket{};
     if (definitionHash == authored_inventory::kNoDefinitionHash || !account::valid(account)
         || !valid_profile_inventory(account)
-        || !build_data::find_collectible_definition(collectibleIndex, collectible)
-        || collectible.itemDefinitionIndex
-               == build_data::collectibles::kUnavailableItemDefinitionIndex
         || !build_data::find_item_definition_hash(definitionHash, item)
         || item.definitionHash != definitionHash
-        || item.definitionIndex != collectible.itemDefinitionIndex
+        // The item resolves first, because the collectible cross-check reads it. With no
+        // collectible the item's own hash is the whole check.
+        || (collectibleIndex != build_data::collectibles::kNoCollectibleIndex
+            && (!build_data::find_collectible_definition(collectibleIndex, collectible)
+                || collectible.itemDefinitionIndex
+                       == build_data::collectibles::kUnavailableItemDefinitionIndex
+                || item.definitionIndex != collectible.itemDefinitionIndex))
         || !build_data::find_configured_item_detail(item.definitionIndex, detail)
         || detail.definitionIndex != item.definitionIndex || detail.definitionHash != definitionHash
         || detail.bucketId != item.bucketId

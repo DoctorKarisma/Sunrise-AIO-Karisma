@@ -22,6 +22,9 @@ struct Candidate {
  * @param character Authored character that owns the item.
  * @param itemDefinitionCount Stable dense item-table row count.
  * @param socketEntryListCount Stable dense socket-list row count.
+ * @param requireEquipmentSlot True for an item resolved out of an equipment slot, which must name
+ *        one. False for unequipped inventory, where a pursuit - a bounty or a quest - carries no
+ *        equipment slot at all and would otherwise be refused, leaving it unplaceable.
  * @param output Receives a complete candidate only on success.
  * @return True when every base, plug, bucket, and initial socket mapping resolves.
  */
@@ -29,6 +32,7 @@ struct Candidate {
                                 const state::CharacterState& character,
                                 std::size_t itemDefinitionCount,
                                 std::size_t socketEntryListCount,
+                                bool requireEquipmentSlot,
                                 Candidate& output) noexcept;
 
 } // namespace sunrise::middleware::datagen::family4::loadout

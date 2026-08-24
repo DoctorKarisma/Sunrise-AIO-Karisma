@@ -11,6 +11,16 @@ namespace sunrise::state::build_data::collectibles {
 inline constexpr std::size_t kDefinitionCapacity = 1U << 15U;
 /** Some collectible rows deliberately do not resolve to an inventory item. */
 inline constexpr std::uint16_t kUnavailableItemDefinitionIndex = 0xFFFFU;
+
+/**
+ * Collectible row meaning "this item has no collectible".
+ *
+ * Vendor sale rows name an item, never a collectible, and bounties, quests and tokens have none at
+ * all. An acquisition carrying this index skips every collectible step - validation, the material
+ * charge, and the cost bookkeeping - and both prepare and commit must agree on it, so the
+ * consistency guard still holds rather than being bypassed.
+ */
+inline constexpr std::uint16_t kNoCollectibleIndex = 0xFFFEU;
 /** A collectible with no acquisition charge carries this native requirement-set sentinel. */
 inline constexpr std::uint16_t kUnavailableMaterialRequirementSetIndex = 0xFFFFU;
 /** Installed requirement sets contain at most six material rows. */

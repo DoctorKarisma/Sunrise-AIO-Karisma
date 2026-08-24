@@ -104,7 +104,7 @@ namespace build_buckets = state::build_data::inventory::buckets;
         Candidate candidate{};
         if (itemCount >= resolved.size()
             || !resolve_item(
-                *authored, character, itemDefinitionCount, socketEntryListCount, candidate)
+                *authored, character, itemDefinitionCount, socketEntryListCount, true, candidate)
             || !place_item(candidate, occupied, resolved[itemCount])) {
             return false;
         }
@@ -118,6 +118,7 @@ namespace build_buckets = state::build_data::inventory::buckets;
                                  character,
                                  itemDefinitionCount,
                                  socketEntryListCount,
+                                 false,
                                  candidate)
                 || !place_item(candidate, occupied, resolved[itemCount])) {
                 return false;
@@ -208,8 +209,12 @@ bool resolve(const state::AccountState& account,
             }
             instanceSoids[instanceSoidCount++] = authored->instanceSoid;
             Candidate candidate{};
-            if (!resolve_item(
-                    *authored, character, itemDefinitionCount, socketEntryListCount, candidate)
+            if (!resolve_item(*authored,
+                              character,
+                              itemDefinitionCount,
+                              socketEntryListCount,
+                              true,
+                              candidate)
                 || !record_equipment_slot(semanticIndex,
                                           candidate.item.equipmentSlot,
                                           semanticToNative,
@@ -240,6 +245,7 @@ bool resolve(const state::AccountState& account,
                                  character,
                                  itemDefinitionCount,
                                  socketEntryListCount,
+                                 false,
                                  selectedInventory[selectedInventoryCount])) {
                 return false;
             }

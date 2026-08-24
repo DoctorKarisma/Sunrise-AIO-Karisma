@@ -1,9 +1,8 @@
-#include "../../../../state/build_data/nodes/node_persistence.h"
 #include <Windows.h>
 
+#include <algorithm>
 #include <array>
 
-#include "../../../../core/filesystem/path.h"
 #include "../../../../core/logging/log.h"
 #include "../../../../middleware/content/packages/reader/reader.h"
 #include "../../../../middleware/content/packages/tables/definition_index_table.h"
@@ -12,9 +11,11 @@
 #include "../../../../state/build_data/abilities/definition.h"
 #include "../../../../state/build_data/inventory/buckets/definition.h"
 #include "../../../../state/build_data/items/details/definition.h"
+#include "../../../../state/build_data/nodes/node_persistence.h"
 #include "../../../../state/build_data/progressions/definition.h"
 #include "../../../../state/build_data/runtime.h"
 #include "../../../../state/build_data/socket_entry_lists/definition.h"
+#include "../../../../state/build_data/vendors/vendor_catalog.h"
 #include "../../../../state/content/content_catalog.h"
 #include "../../../../state/runtime/runtime.h"
 #include "../../../memory/current_process_memory.h"
@@ -23,12 +24,52 @@
 #include "../../hash_names/hash_name_build.h"
 #include "../../scenarios/scenario_build.h"
 #include "../../spawn_sets/spawn_set_build.h"
+#include "../../vendors/vendor_build.h"
 #include "build.h"
 #include "internal.h"
 #include "package_socket_plug_build.h"
 
 namespace sunrise::client::content::items::packages {
 namespace {
+
+/**
+ * Publishes the vendor catalog, index and definitions both.
+ *
+ * `vendors::build` always reads the whole index but reads a definition only for a hash it is asked
+ * for, because each is over 100 KiB. The hashes only exist once the index is read, so this runs it
+ * twice: once to learn them, then again to read every definition the index names. Without the
+ * second pass a vendor purchase resolves its index row and then finds no definition behind it.
+ *
+ * @param source Package directory and borrowed block keys.
+ * @param scratch Block storage shared with the other content passes.
+ */
+void build_vendor_catalog(const reader::Source& source, reader::Scratch& scratch) noexcept {
+    namespace vendor_domain = state::build_data::vendors;
+    if (state::build_data::vendor_catalog_ready()) {
+        return;
+    }
+    if (!content::vendors::build(source, scratch, {})) {
+        return;
+    }
+    static std::array<vendor_domain::IndexEntry, vendor_domain::kIndexCapacity> index{};
+    std::size_t count = 0;
+    if (!vendor_domain::snapshot_index(index, count) || count == 0) {
+        return;
+    }
+    // Only the first `kDefinitionCapacity` rows are read. The domain is sized for a handful of
+    // vendors on purpose, because each definition is over 100 KiB: asking for all 511 overruns the
+    // sale-row bank at 32 definitions and publishes nothing but the index. The Tower's vendors sit
+    // low in the index, so the leading window covers them.
+    const std::size_t wanted = (std::min)(count, vendor_domain::kDefinitionCapacity);
+    static std::array<std::uint32_t, vendor_domain::kDefinitionCapacity> hashes{};
+    for (std::size_t row = 0; row < wanted; ++row) {
+        hashes[row] = index[row].definitionHash;
+    }
+    // The first pass published an index with no definitions behind it, so it has to be dropped
+    // before the second pass will run at all.
+    vendor_domain::clear();
+    (void)content::vendors::build(source, scratch, std::span(hashes).first(wanted));
+}
 
 /** @return True when every domain owned by the package pass is published. */
 [[nodiscard]] bool package_domains_ready() noexcept {
@@ -99,6 +140,12 @@ bool build() noexcept {
         (void)content::spawn_sets::build(packageSource, storage.scratch);
         (void)content::hash_names::build(packageSource, storage.scratch);
         (void)content::entity_names::build(packageSource, storage.scratch);
+        build_vendor_catalog(packageSource, storage.scratch);
+
+        if (package_domains_ready()) {
+            SecureZeroMemory(&keys, sizeof keys);
+            return true;
+        }
     }
 
     if (root_domains_ready()) {
@@ -220,6 +267,7 @@ bool build() noexcept {
                     }
                 }
             }
+
             if (!state::build_data::record_definitions_ready()) {
                 std::size_t recordCount = 0;
                 if (build_records(source,

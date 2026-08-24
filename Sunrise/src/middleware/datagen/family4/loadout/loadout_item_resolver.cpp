@@ -78,15 +78,18 @@ constexpr std::int32_t kInstancedQuantity = 1;
         }
         return true;
     }
+
     if (authored.policy != authored_inventory::SocketPolicy::authored
         || authored.plugCount != definition.ordinarySocketCount) {
         return false;
     }
+
     for (std::size_t index = 0; index < authored.plugCount; ++index) {
         const std::optional<std::uint32_t>& definitionHash = authored.plugs[index];
         if (!definitionHash.has_value()) {
             continue;
         }
+
         std::uint16_t plugIndex = 0;
         if (!resolve_plug(*definitionHash, itemDefinitionCount, plugIndex)) {
             return false;
@@ -125,6 +128,7 @@ bool resolve_item(const authored_inventory::Item& authored,
                   const state::CharacterState& character,
                   std::size_t itemDefinitionCount,
                   std::size_t socketEntryListCount,
+                  bool requireEquipmentSlot,
                   Candidate& output) noexcept {
     if (!authored_inventory::valid(authored) || itemDefinitionCount == 0
         || itemDefinitionCount > build_items::kDefinitionCapacity || socketEntryListCount == 0
@@ -137,13 +141,23 @@ bool resolve_item(const authored_inventory::Item& authored,
     build_buckets::Descriptor bucket{};
     build_socket_lists::Definition socketList{};
     std::uint8_t nativeEquipmentSlot = 0;
+
     if (!state::build_data::find_item_definition_hash(authored.definitionHash, itemDefinition)
         || !state::build_data::find_configured_item_detail(itemDefinition.definitionIndex,
                                                            itemDetail)
-        || itemDefinition.bucketId != itemDetail.bucketId
-        || !authored_inventory::resolve_native_equipment_slot(
-            authored.definitionHash, itemDetail.equipmentSlot, nativeEquipmentSlot)
-        || static_cast<std::size_t>(nativeEquipmentSlot) >= build_details::kEquipmentSlotCount
+        || itemDefinition.bucketId != itemDetail.bucketId) {
+        return false;
+    }
+
+    // Preserve the AIO's native equipment-slot resolution while allowing PR #87 pursuits.
+    // Quests and bounties intentionally have no equipment slot because they are never equipped.
+    const bool hasNativeEquipmentSlot = authored_inventory::resolve_native_equipment_slot(
+        authored.definitionHash, itemDetail.equipmentSlot, nativeEquipmentSlot);
+
+    if ((requireEquipmentSlot && !hasNativeEquipmentSlot)
+        || (itemDetail.equipmentSlot.has_value() && !hasNativeEquipmentSlot)
+        || (hasNativeEquipmentSlot
+            && static_cast<std::size_t>(nativeEquipmentSlot) >= build_details::kEquipmentSlotCount)
         || !state::build_data::find_inventory_bucket_descriptor(itemDetail.bucketId, bucket)
         || bucket.arraySelector != build_buckets::ArraySelector::character
         || !state::build_data::find_socket_entry_list(itemDetail.socketEntryListIndex, socketList)
@@ -155,7 +169,10 @@ bool resolve_item(const authored_inventory::Item& authored,
 
     Candidate candidate{};
     candidate.bucket = bucket;
-    candidate.item.equipmentSlot = nativeEquipmentSlot;
+
+    // Slot zero for a slotless pursuit is safe: only equipped rows consume this field.
+    candidate.item.equipmentSlot = hasNativeEquipmentSlot ? nativeEquipmentSlot : std::uint8_t{0};
+
     candidate.item.mutationSerial = authored.mutationSerial;
     candidate.item.flags = authored.flags;
     if (!resolve_quantity(authored, itemDetail, candidate.item.quantity)
@@ -165,6 +182,7 @@ bool resolve_item(const authored_inventory::Item& authored,
                                      candidate.item.instance.ordinarySockets)) {
         return false;
     }
+
     std::uint32_t completedFlags = candidate.item.flags;
     auto completedPlugs = candidate.item.instance.ordinarySockets.plugs;
     if (state::build_data::complete_exotic_catalyst(

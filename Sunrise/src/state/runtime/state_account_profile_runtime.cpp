@@ -510,14 +510,29 @@ valid_profile_mutation_shape(const PendingProfileItemAcquisition& mutation) noex
     inventory_buckets::Descriptor bucket{};
     build_data::items::Definition item{};
     build_data::collectibles::Definition collectible{};
-    if (!build_data::find_collectible_definition(mutation.collectibleIndex, collectible)
-        || collectible.itemDefinitionIndex
-               == build_data::collectibles::kUnavailableItemDefinitionIndex
-        || collectible.materialRequirementSetHash != mutation.materialRequirementSetHash
-        || collectible.materialRequirementCount != mutation.materialRequirementCount
-        || !build_data::find_item_definition_hash(mutation.acquiredDefinitionHash, item)
-        || collectible.itemDefinitionIndex != item.definitionIndex
-        || !build_data::find_configured_item_detail(item.definitionIndex, detail)
+    // A vendor purchase names an item, never a collectible, and arrives with the sentinel. The
+    // collectible steps are skipped for it rather than faked, exactly as prepare already does  - 
+    // this is the same gate, and omitting it here is what took the connection down: prepare
+    // succeeded, the reply went out saying so, then preview and commit both refused and the
+    // Queuez frame was never staged.
+    if (!build_data::find_item_definition_hash(mutation.acquiredDefinitionHash, item)) {
+        return false;
+    }
+    if (mutation.collectibleIndex == build_data::collectibles::kNoCollectibleIndex) {
+        // With no collectible to hold them, both cost fields must still be clear. This is the
+        // rule `commit_item_acquisition` applies to the character path.
+        if (mutation.materialRequirementSetHash != 0 || mutation.materialRequirementCount != 0) {
+            return false;
+        }
+    } else if (!build_data::find_collectible_definition(mutation.collectibleIndex, collectible)
+               || collectible.itemDefinitionIndex
+                      == build_data::collectibles::kUnavailableItemDefinitionIndex
+               || collectible.materialRequirementSetHash != mutation.materialRequirementSetHash
+               || collectible.materialRequirementCount != mutation.materialRequirementCount
+               || collectible.itemDefinitionIndex != item.definitionIndex) {
+        return false;
+    }
+    if (!build_data::find_configured_item_detail(item.definitionIndex, detail)
         || detail.definitionHash != mutation.acquiredDefinitionHash
         || detail.definitionIndex != item.definitionIndex || detail.bucketId != item.bucketId
         || detail.bucketId != mutation.bucketId
