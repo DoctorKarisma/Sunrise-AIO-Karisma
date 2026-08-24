@@ -570,10 +570,28 @@ apply_dismantle_rewards(const AccountState& before,
         || dismantledDetail.definitionIndex != dismantledDefinition.definitionIndex
         || dismantledDetail.definitionHash != dismantledDefinition.definitionHash
         || dismantledDetail.bucketId != dismantledDefinition.bucketId
-        || dismantledDetail.instancedDefinitionState
-               != item_details::InstancedDefinitionState::instanced
-        || !dismantledDetail.equipmentSlot.has_value()
-        || static_cast<std::uint8_t>(*dismantledDetail.equipmentSlot) != dismantledSlot) {
+        // A quest step is authored stackable rather than instanced - inside the pursuit bucket only
+        // bounties and containers set the instanced flag - so requiring an instanced definition
+        // refused every quest step while a bounty sitting beside it discarded fine.
+        //
+        // Removing the row is the same thing as dismantling only while the row holds one. A stack
+        // of more than one would lose the rest with it, so that stays refused: decrementing a stack
+        // is a different mutation and this path does not encode it.
+        || (dismantledDetail.instancedDefinitionState
+                != item_details::InstancedDefinitionState::instanced
+            && dismantledItem.quantity != 1)
+        // A pursuit - a bounty or a quest step - names no equipment slot, because nothing equips
+        // it. The loadout resolver already stands such an item at slot zero, so demanding a slot
+        // here refused the one kind of item whose slot was never going to exist, and discarding a
+        // bounty failed as `ownership_or_resolve`. Compare against the resolver's own default
+        // instead, so the two agree about where a slotless item stands.
+        //
+        // Crediting stays correct without a further guard: native slot zero is the subclass slot,
+        // which `gear_class_of` maps to no gear class, so a dismantled pursuit pays out nothing.
+        || (dismantledDetail.equipmentSlot.has_value()
+                ? static_cast<std::uint8_t>(*dismantledDetail.equipmentSlot)
+                : std::uint8_t{0})
+               != dismantledSlot) {
         return false;
     }
 
