@@ -1,6 +1,6 @@
 ## Sunrise-AIO
 
-This is a community-maintained all-in-one build of Sunrise, combining the latest changes from the upstream repositories with additional features and improvements.
+This is a community-maintained all-in-one build of Sunrise, combining the latest changes from upstream repositories with additional features and improvements from various community forks. Since these features were developed independently using different implementations, compatibility between them is not guaranteed and conflicts or bugs may occur.
 
 ## Bugs Disclaimer
 If you encounter any bugs while using this build, please do not report them to the official Sunrise staff. This is an unofficial release containing changes and features that may or may not be added to Sunrise in the future.
