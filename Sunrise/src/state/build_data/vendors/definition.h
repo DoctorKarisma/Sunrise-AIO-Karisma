@@ -9,9 +9,9 @@ namespace sunrise::state::build_data::vendors {
 /** Rows of the installed vendor index. The live table has 511. */
 inline constexpr std::size_t kIndexCapacity = 512;
 /** Vendor definitions this catalog holds rows for. A definition is read only when asked for. */
-inline constexpr std::size_t kDefinitionCapacity = 32;
+inline constexpr std::size_t kDefinitionCapacity = 48;
 /** Sale rows across every held definition. One installed definition declares 277. */
-inline constexpr std::size_t kSaleRowCapacity = 4096;
+inline constexpr std::size_t kSaleRowCapacity = 8192;
 /** Installed rows across every held definition. One installed definition declares 43. */
 inline constexpr std::size_t kInstalledRowCapacity = 2048;
 

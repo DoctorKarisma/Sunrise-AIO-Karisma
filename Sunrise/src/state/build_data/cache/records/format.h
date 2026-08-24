@@ -29,6 +29,12 @@ inline constexpr std::array<char, 8> kCacheMagic{'S', 'U', 'N', 'R', 'I', 'S', '
 
 inline constexpr std::uint32_t kCacheFormatVersion = 51;
 
+/**
+ * Current build-data cache format. An older cache is rebuilt rather than read.
+ * Bump it when a stored shape changes, and when the extraction filling it changes what it writes.
+ * A cached row survives a code change, so a corrected walk keeps publishing the old rows.
+ */
+inline constexpr std::uint32_t kCacheFormatVersion = 45;
 /** Signed -1 on disk means there is no equipment slot. */
 inline constexpr std::int8_t kAbsentEquipmentSlot = -1;
 
