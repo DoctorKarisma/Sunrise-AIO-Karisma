@@ -21,6 +21,7 @@
 #include "../../middleware/web_service/messages/opcode601/opcode601_codec.h"
 #include "../../middleware/web_service/messages/opcode801.h"
 #include "../../middleware/web_service/messages/opcode901/opcode901_codec.h"
+#include "../../middleware/web_service/messages/opcode904/opcode904_codec.h"
 #include "../../middleware/web_service/messages/opcode903.h"
 #include "../../middleware/web_service/web_service_envelope.h"
 #include "../../state/account/account_state.h"
@@ -290,11 +291,8 @@ bool consume(std::span<const std::byte> request,
                || encode_echo(message, response, written);
     }
 
-    // Runs before the shared response-shape path, which would answer the success status.
-    if (message.opcode == middleware::web_service::messages::opcode901::kOpcode) {
-        return refuse_purchase(message, response, written)
-               || encode_echo(message, response, written);
-    }
+    // Vendor purchases fall through to the shared response-shape path now, which runs the action
+    // and answers the success status. `refuse_purchase` stays for the cases the action declines.
 
     if (message.opcode == middleware::web_service::messages::opcode601::kOpcode) {
         return middleware::web_service::messages::opcode601::encode_response(
@@ -337,6 +335,10 @@ bool consume(std::span<const std::byte> request,
         mutate_item_state(message, outcome);
     } else if (message.opcode == kItemAcquisitionOpcode) {
         acquire_item(message, outcome);
+    } else if (message.opcode == middleware::web_service::messages::opcode901::kOpcode) {
+        purchase_item(message, outcome);
+    } else if (message.opcode == middleware::web_service::messages::opcode904::kOpcode) {
+        acquire_quest(message, outcome);
     } else {
         dispatched = false;
     }

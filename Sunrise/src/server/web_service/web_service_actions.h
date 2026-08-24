@@ -19,6 +19,8 @@ void mutate_equipped_socket_plug(const middleware::web_service::Message& message
 void mutate_item_state(const middleware::web_service::Message& message, Outcome& outcome) noexcept;
 void dismantle_item(const middleware::web_service::Message& message, Outcome& outcome) noexcept;
 void acquire_item(const middleware::web_service::Message& message, Outcome& outcome) noexcept;
+void purchase_item(const middleware::web_service::Message& message, Outcome& outcome) noexcept;
+void acquire_quest(const middleware::web_service::Message& message, Outcome& outcome) noexcept;
 
 /**
  * Decodes one opcode-1801 Triumphs claim request and reports the record it names.
