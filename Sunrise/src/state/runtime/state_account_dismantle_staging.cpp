@@ -500,6 +500,19 @@ apply_dismantle_rewards(const AccountState& before,
         return false;
     }
 
+    // Every survivor must still resolve to the same equipment lane, and how many of them the
+    // removal shifted is reported so a dismantle that quietly rearranged a bucket stays visible.
+    //
+    // Their ordering tokens are deliberately left alone. The serial on an unequipped row is also
+    // the Client's ordering token for that bucket, and a fresh greatest serial moves that item to
+    // the first cell - the equip path relies on exactly that, which is why it hands a displaced
+    // item the clicked row's prior token rather than a new one.
+    //
+    // Nothing changes cells when an item is dismantled. The rows below it shift up only because the
+    // array closed the gap, so stamping each of them sent every one to the front, and the bucket
+    // visibly reshuffled before it settled - abandoning a quest step showed a different quest in
+    // its cell for a moment. Leaving the tokens alone keeps the order the player was looking at,
+    // and the shift still reaches the Client because the whole character is republished.
     std::size_t movedItemCount = 0;
     for (std::size_t index = 0; index < after.inventory.count; ++index) {
         const std::uint64_t survivorSoid = after.inventory.values[index].instanceSoid;
@@ -513,31 +526,6 @@ apply_dismantle_rewards(const AccountState& before,
             return false;
         }
         movedItemCount += static_cast<std::size_t>(beforeRow != afterRow);
-    }
-
-    // The serial is signed on the wire, so it must stay inside the positive int32 range.
-    constexpr std::uint32_t kMaximumInventorySerial =
-        static_cast<std::uint32_t>((std::numeric_limits<std::int32_t>::max)());
-    if (after.nextInventorySerial > kMaximumInventorySerial
-        || movedItemCount > kMaximumInventorySerial - after.nextInventorySerial) {
-        return false;
-    }
-
-    for (std::size_t index = 0; index < after.inventory.count; ++index) {
-        const std::uint64_t survivorSoid = after.inventory.values[index].instanceSoid;
-        std::uint16_t beforeRow = 0;
-        std::uint16_t afterRow = 0;
-        std::uint8_t beforeSlot = 0;
-        std::uint8_t afterSlot = 0;
-        if (!find_unequipped_row(beforeLoadout, survivorSoid, beforeRow, beforeSlot)
-            || !find_unequipped_row(placedAfter, survivorSoid, afterRow, afterSlot)
-            || beforeSlot != afterSlot) {
-            return false;
-        }
-        if (beforeRow != afterRow) {
-            after.inventory.values[index].mutationSerial =
-                static_cast<std::int32_t>(after.nextInventorySerial++);
-        }
     }
 
     candidate.characters[characterIndex] = after;
