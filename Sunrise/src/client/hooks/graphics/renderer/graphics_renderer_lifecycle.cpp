@@ -28,6 +28,7 @@ constexpr UINT kBackBufferIndex = 0;
     if (resources.window == nullptr) {
         return false;
     }
+
     if (IsWindow(resources.window) == FALSE) {
         if (g_captureReleaseWindow == resources.window) {
             g_captureReleaseWindow = nullptr;
@@ -39,6 +40,7 @@ constexpr UINT kBackBufferIndex = 0;
     if (windowThread == 0) {
         return false;
     }
+
     HWND captured = nullptr;
     if (windowThread == GetCurrentThreadId()) {
         captured = GetCapture();
@@ -50,8 +52,10 @@ constexpr UINT kBackBufferIndex = 0;
             g_captureReleaseWindow = resources.window;
             return true;
         }
+
         captured = information.hwndCapture;
     }
+
     if (captured != resources.window) {
         if (g_captureReleaseWindow == resources.window) {
             g_captureReleaseWindow = nullptr;
@@ -100,6 +104,7 @@ constexpr std::array<ViewFormat, 6> kTypelessViewFormats{
         if (candidate.stored != texture.Format) {
             continue;
         }
+
         output = {};
         output.Format = candidate.view;
         output.ViewDimension = texture.SampleDesc.Count > 1 ? D3D11_RTV_DIMENSION_TEXTURE2DMS
@@ -118,6 +123,7 @@ constexpr std::array<ViewFormat, 6> kTypelessViewFormats{
     if (wait_for_capture_release(resources)) {
         return false;
     }
+
     if (resources.inputInstalled) {
         if (!input::uninstall_raw_input_window()) {
             return false;
@@ -127,20 +133,24 @@ constexpr std::array<ViewFormat, 6> kTypelessViewFormats{
         }
         resources.inputInstalled = false;
     }
+
     if (resources.dx11BackendInitialized) {
         ImGui_ImplDX11_Shutdown();
         resources.dx11BackendInitialized = false;
     }
+
     if (resources.win32BackendInitialized) {
         ImGui_ImplWin32_Shutdown();
         resources.win32BackendInitialized = false;
     }
+
     if (resources.layoutInitialized) {
         if (!core::ui::layout::shutdown()) {
             return false;
         }
         resources.layoutInitialized = false;
     }
+
     release_resources(resources);
     return true;
 }
@@ -169,28 +179,37 @@ constexpr std::array<ViewFormat, 6> kTypelessViewFormats{
         // acquire reports its own step.
         return false;
     }
+
     if (!core::ui::layout::initialize()) {
         release_resources(staged);
         report::note(report::Stage::init, report::Reason::layout);
         return false;
     }
+
     staged.layoutInitialized = true;
+
     if (!ImGui_ImplWin32_Init(staged.window)) {
         report::note(report::Stage::init, report::Reason::win32Backend);
         return discard_staged(staged);
     }
+
     staged.win32BackendInitialized = true;
+
     if (!ImGui_ImplDX11_Init(staged.device, staged.context)) {
         report::note(report::Stage::init, report::Reason::dx11Backend);
         return discard_staged(staged);
     }
+
     staged.dx11BackendInitialized = true;
+
     // The interface draws its card without the logo when the sheet cannot be uploaded.
     (void)textures::upload_logo_sheet(staged.device, staged.logoSheet);
+
     if (!input::install(staged.window)) {
         report::note(report::Stage::init, report::Reason::windowInput);
         return discard_staged(staged);
     }
+
     staged.inputInstalled = true;
     g_resources = staged;
     report::note_active();
@@ -213,16 +232,20 @@ bool create_render_target(Resources& resources) noexcept {
         || resources.renderTarget != nullptr) {
         return false;
     }
+
     ID3D11Texture2D* backBuffer = nullptr;
     const HRESULT bufferResult = resources.swapChain->GetBuffer(
         kBackBufferIndex, __uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&backBuffer));
+
     if (FAILED(bufferResult) || backBuffer == nullptr) {
         release_com(backBuffer);
         report::note(report::Stage::target, report::Reason::backBuffer);
         return false;
     }
+
     HRESULT targetResult =
         resources.device->CreateRenderTargetView(backBuffer, nullptr, &resources.renderTarget);
+
     if (FAILED(targetResult)) {
         // The inferred description covers a typed buffer only.
         D3D11_RENDER_TARGET_VIEW_DESC view{};
@@ -233,11 +256,14 @@ bool create_render_target(Resources& resources) noexcept {
             report::note(report::Stage::target, report::Reason::viewFormat);
         }
     }
+
     release_com(backBuffer);
+
     if (FAILED(targetResult) || resources.renderTarget == nullptr) {
         report::note(report::Stage::target, report::Reason::view);
         return false;
     }
+
     return true;
 }
 
@@ -249,6 +275,7 @@ void release_render_target(Resources& resources) noexcept {
 /** @param resources SDK resources freed in an order that respects their dependencies. */
 void release_resources(Resources& resources) noexcept {
     release_render_target(resources);
+    textures::release_item_icons();
     textures::release_logo_sheet(resources.logoSheet);
     release_com(resources.context);
     release_com(resources.device);
@@ -292,6 +319,7 @@ bool active() noexcept {
 /** Picks one usable swap chain and draws the UI frame on it. */
 void present(IDXGISwapChain* swapChain) noexcept {
     AcquireSRWLockExclusive(&g_rendererLock);
+
     if (g_resources.swapChain != nullptr && g_resources.swapChain != swapChain
         && g_resources.activeSurfaceChanges == 0
         && selection::matches_output_window(swapChain, g_resources.window)) {
@@ -301,36 +329,45 @@ void present(IDXGISwapChain* swapChain) noexcept {
             return;
         }
     }
+
     if (g_resources.swapChain != nullptr && !fully_active_locked()) {
         if (g_resources.activeSurfaceChanges != 0) {
             // Present can run at the same time as the original call, which owns the back buffer.
             ReleaseSRWLockExclusive(&g_rendererLock);
             return;
         }
+
         report::note(report::Stage::shutdown, report::Reason::surfaceLost);
+
         if (!shutdown_locked()) {
             ReleaseSRWLockExclusive(&g_rendererLock);
             return;
         }
     }
+
     if (g_resources.swapChain == nullptr) {
         (void)initialize_locked(swapChain);
     }
+
     bool framed = false;
+
     if (g_resources.swapChain == swapChain && fully_active_locked()) {
         render_frame_locked();
         framed = true;
     }
+
     ReleaseSRWLockExclusive(&g_rendererLock);
 
     if (framed) {
         // The timeout hold enters game code, so it runs only after the renderer lock is gone.
         inactivity::poll();
     }
+
     // The cursor policy calls Win32, so it runs only after the renderer lock is gone.
     const bool visible = core::ui::runtime::snapshot().visible;
     cursor::apply_visibility(visible);
     polled_input::apply_visibility(visible);
+
     // The game makes its raw-mouse window during startup, so the first tries find nothing.
     (void)input::install_raw_input_window();
 }

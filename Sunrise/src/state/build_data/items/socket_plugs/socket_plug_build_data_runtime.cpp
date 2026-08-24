@@ -58,6 +58,10 @@ bool publish_socket_plug_rules(std::span<const items::socket_plugs::Rule> rules,
 }
 
 /** Answers one exact installed item/lane/plug compatibility query. */
+/** Answers whether one plug appears in the installed ordinary-socket relation. */
+bool is_socket_plug_valid(std::uint16_t plugDefinitionIndex) noexcept {
+    return socket_plug_rules_ready() && items::socket_plugs::contains(plugDefinitionIndex);
+}
 bool is_socket_plug_allowed(std::uint16_t itemDefinitionIndex,
                             std::uint8_t lane,
                             std::uint16_t plugDefinitionIndex) noexcept {

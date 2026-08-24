@@ -13,10 +13,17 @@
 #include <vector>
 
 #include "../../../client/content/items/packages/internal.h"
+#include "../../../client/content/placements/placement_extract.h"
 #include "../../../client/hooks/spawn/spawn_runtime.h"
+#include "../../../client/player/player_position.h"
+#include "../../../client/spawn/population_settings_store.h"
+#include "../../../client/spawn/spawn_keybind_store.h"
 #include "../../../core/filesystem/path.h"
 #include "../../../core/ui/components/picker/ui_picker_component.h"
 #include "../../../middleware/content/packages/reader/reader.h"
+#include "../../../state/activity/definition.h"
+#include "../../../state/activity/destination/activity_destination_snapshot.h"
+#include "../../../state/activity/membership/activity_membership_query.h"
 #include "../../../state/build_data/runtime.h"
 
 namespace sunrise::server::ui::spawn {
@@ -31,23 +38,23 @@ constexpr std::uint32_t kEntityClass = 0x80809C0FU;
 
 enum class ObjectType : std::uint8_t {
     Inherited = 0,
-    StaticMesh = 1,                 // Interactable
+    StaticMesh = 1, // Interactable
     PropSimpleDeprecated = 2,
     PropExpensiveDeprecated = 3,
-    PropCosmeticStatic = 4,         // World effects / decorations
-    PropCosmeticMovable = 5,        // Moving props
+    PropCosmeticStatic = 4,  // World effects / decorations
+    PropCosmeticMovable = 5, // Moving props
     PropCosmeticMovableGarbage = 6,
-    PropNetworkedStatic = 7,        // Ad spawns
-    PropNetworkedMovable = 8,       // Explodable
+    PropNetworkedStatic = 7,  // Ad spawns
+    PropNetworkedMovable = 8, // Explodable
     PropCinematic = 9,
     Speedtree = 10,
     Interactive = 11,
-    Biped = 12,                     // Guardians, Enemies, NPCs
+    Biped = 12, // Guardians, Enemies, NPCs
     Creature = 13,
-    Weapon = 14,                    // Weapon props
-    Vehicle = 15,                   // Sparrows, Pikes, Ships
-    Turret = 16,                    // VehicleEntity
-    Emitter = 17,                   // Effects, some interactive projectiles
+    Weapon = 14,  // Weapon props
+    Vehicle = 15, // Sparrows, Pikes, Ships
+    Turret = 16,  // VehicleEntity
+    Emitter = 17, // Effects, some interactive projectiles
     Projectile = 18,
     Item = 19,
     ItemAmmo = 20,
@@ -127,6 +134,20 @@ std::vector<state::build_data::entity_names::Name> g_names{};
 bool g_scanned{};
 std::size_t g_capturingKey{spawn_keys::kActionCount};
 
+enum class PopulationSource : int {
+    visibleMain = 0,
+    selectedMain = 1,
+    map = 2,
+};
+
+native::PopulationSettings g_population{};
+PopulationSource g_populationSource{PopulationSource::visibleMain};
+bool g_populationPrimed{};
+bool g_extractCombatantsOnly{true};
+bool g_extractPublicOnly{true};
+client::content::placements::ExtractResult g_lastExtract{};
+bool g_lastExtractValid{};
+
 void key_name(std::uint32_t virtualKey, std::array<char, 64>& output) noexcept {
     if (virtualKey == spawn_keys::kNoKey) {
         (void)std::snprintf(output.data(), output.size(), "None");
@@ -167,9 +188,8 @@ void key_name(std::uint32_t virtualKey, std::array<char, 64>& output) noexcept {
     return false;
 }
 
-[[nodiscard]] bool key_picker(spawn_keys::Action action,
-                              std::uint32_t& virtualKey,
-                              float width) noexcept {
+[[nodiscard]] bool
+key_picker(spawn_keys::Action action, std::uint32_t& virtualKey, float width) noexcept {
     const std::size_t index = static_cast<std::size_t>(action);
     ImGui::PushID(static_cast<int>(index));
     if (g_capturingKey == index) {
@@ -201,8 +221,8 @@ names_of(std::uint32_t tag) noexcept {
         g_names.begin(), g_names.end(), tag, [](const auto& name, std::uint32_t wanted) {
             return name.tag < wanted;
         });
-    const auto last = std::upper_bound(
-        first, g_names.end(), tag, [](std::uint32_t wanted, const auto& name) {
+    const auto last =
+        std::upper_bound(first, g_names.end(), tag, [](std::uint32_t wanted, const auto& name) {
             return wanted < name.tag;
         });
     return {first, last};
@@ -210,8 +230,18 @@ names_of(std::uint32_t tag) noexcept {
 
 [[nodiscard]] bool projectile_name(std::string_view name) noexcept {
     constexpr std::array<std::string_view, 12> markers{
-        "projectile", "missile", "rocket", "grenade", "fireball", "mortar",
-        "cannonball", "seeker", "tracer", "bullet", "plasma_bolt", "weapon_bolt",
+        "projectile",
+        "missile",
+        "rocket",
+        "grenade",
+        "fireball",
+        "mortar",
+        "cannonball",
+        "seeker",
+        "tracer",
+        "bullet",
+        "plasma_bolt",
+        "weapon_bolt",
     };
     return std::any_of(markers.begin(), markers.end(), [name](std::string_view marker) {
         return name.find(marker) != std::string_view::npos;
@@ -298,11 +328,10 @@ bool collect_entity(void*, const package_reader::ClassEntry& entry) noexcept {
     const bool namedProjectile = std::any_of(names.begin(), names.end(), [](const auto& name) {
         return projectile_name({name.text.data(), name.length});
     });
-    Column* const column = objectType == ObjectType::Projectile || namedProjectile
-                               ? &g_projectile
-                           : objectType == ObjectType::ItemAmmo || objectType == ObjectType::ItemLoot
-                               ? &g_loot
-                               : &g_main;
+    Column* const column =
+        objectType == ObjectType::Projectile || namedProjectile                    ? &g_projectile
+        : objectType == ObjectType::ItemAmmo || objectType == ObjectType::ItemLoot ? &g_loot
+                                                                                   : &g_main;
     if (names.empty()) {
         add_candidate(*column, entry.tag, type, entry.packageFamily, nullptr);
     } else {
@@ -323,15 +352,14 @@ void finish_column(Column& column) {
                   return std::string_view(first.label.data())
                          < std::string_view(second.label.data());
               });
-    column.candidates.erase(
-        std::unique(column.candidates.begin(),
-                    column.candidates.end(),
-                    [](const Candidate& first, const Candidate& second) {
-                        return first.tag == second.tag
-                               && std::string_view(first.label.data())
-                                      == std::string_view(second.label.data());
-                    }),
-        column.candidates.end());
+    column.candidates.erase(std::unique(column.candidates.begin(),
+                                        column.candidates.end(),
+                                        [](const Candidate& first, const Candidate& second) {
+                                            return first.tag == second.tag
+                                                   && std::string_view(first.label.data())
+                                                          == std::string_view(second.label.data());
+                                        }),
+                            column.candidates.end());
     column.items.clear();
     column.items.reserve(column.candidates.size());
     for (const Candidate& candidate : column.candidates) {
@@ -379,6 +407,257 @@ void refresh() noexcept {
     g_scanned = true;
 }
 
+[[nodiscard]] bool current_destination(std::string_view& output) noexcept {
+    const std::uint64_t sessionId =
+        state::activity::membership::live_region_session(state::activity::kAbsentSessionId);
+    if (sessionId == state::activity::kAbsentSessionId) {
+        return false;
+    }
+
+    state::activity::destination::DestinationSelection selection{};
+    if (!state::activity::destination::snapshot(sessionId, selection)) {
+        return false;
+    }
+
+    output = std::string_view(reinterpret_cast<const char*>(selection.packageName.data()),
+                              selection.packageNameLength);
+    return !output.empty();
+}
+
+void publish_map_points() noexcept {
+    std::vector<spawn_keys::MapPoint> stored(spawn_keys::map_size());
+    const std::size_t count = spawn_keys::copy_map(stored);
+    std::vector<native::PopulationPoint> points{};
+    points.reserve(count);
+    for (std::size_t index = 0; index < count; ++index) {
+        native::PopulationPoint point{};
+        point.tag = stored[index].tag;
+        point.position = stored[index].position;
+        points.push_back(point);
+    }
+    native::set_population_points(points);
+}
+
+void publish_population_source() noexcept {
+    if (g_populationSource == PopulationSource::map) {
+        publish_map_points();
+        return;
+    }
+
+    std::vector<std::uint32_t> tags{};
+    if (g_populationSource == PopulationSource::selectedMain) {
+        if (g_main.selected < g_main.candidates.size()) {
+            tags.push_back(g_main.candidates[g_main.selected].tag);
+        }
+    } else {
+        tags.reserve(g_main.candidates.size());
+        for (const Candidate& candidate : g_main.candidates) {
+            tags.push_back(candidate.tag);
+        }
+        std::sort(tags.begin(), tags.end());
+        tags.erase(std::unique(tags.begin(), tags.end()), tags.end());
+    }
+
+    native::set_population_tags(tags);
+}
+
+void draw_population_tab() noexcept {
+    if (!g_populationPrimed) {
+        g_population = native::population();
+        g_populationSource =
+            g_population.useMap ? PopulationSource::map : PopulationSource::visibleMain;
+        publish_population_source();
+        g_populationPrimed = true;
+    }
+
+    bool changed = false;
+
+    changed = ImGui::Checkbox("Populate the world", &g_population.enabled) || changed;
+    ImGui::SameLine();
+    changed = ImGui::Checkbox("Populate on load", &g_population.autoOnLoad) || changed;
+    ImGui::SameLine();
+    ImGui::TextDisabled("%zu live | %zu source entities",
+                        native::population_live(),
+                        native::population_source_count());
+
+    int source = static_cast<int>(g_populationSource);
+    bool sourceChanged = ImGui::RadioButton("Visible main entities", &source, 0);
+    ImGui::SameLine();
+    sourceChanged = ImGui::RadioButton("Selected main entity", &source, 1) || sourceChanged;
+    ImGui::SameLine();
+    sourceChanged = ImGui::RadioButton("Recorded map", &source, 2) || sourceChanged;
+    if (sourceChanged) {
+        g_populationSource = static_cast<PopulationSource>(source);
+        g_population.useMap = g_populationSource == PopulationSource::map;
+        publish_population_source();
+        changed = true;
+    }
+
+    if (g_populationSource != PopulationSource::map) {
+        if (ImGui::Button("Apply source")) {
+            publish_population_source();
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled(g_populationSource == PopulationSource::selectedMain
+                                ? "Uses the entity currently selected under Main spawner."
+                                : "Uses the entities currently visible under Main spawner.");
+    } else {
+        std::string_view destination{};
+        const bool located = current_destination(destination);
+
+        ImGui::Separator();
+        ImGui::TextUnformatted("Population map");
+        ImGui::TextDisabled("Destination: %.*s | %zu recorded | %zu published",
+                            static_cast<int>(located ? destination.size() : 7),
+                            located ? destination.data() : "unknown",
+                            spawn_keys::map_size(),
+                            native::population_point_count());
+
+        const bool hasEntity = g_main.selected < g_main.candidates.size();
+        if (ImGui::Button("Record point here") && hasEntity) {
+            const client::player::position::Snapshot player = client::player::position::snapshot();
+            if (player.present) {
+                spawn_keys::MapPoint point{};
+                point.tag = g_main.candidates[g_main.selected].tag;
+                point.position = player.position;
+                if (spawn_keys::add_map_point(point)) {
+                    publish_map_points();
+                }
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Undo last")) {
+            if (spawn_keys::remove_last_map_point()) {
+                publish_map_points();
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Clear map")) {
+            spawn_keys::clear_map();
+            publish_map_points();
+        }
+
+        ImGui::BeginDisabled(!located);
+        if (ImGui::Button("Save map")) {
+            (void)spawn_keys::save_map(destination);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Load map")) {
+            (void)spawn_keys::load_map(destination);
+            publish_map_points();
+        }
+        ImGui::EndDisabled();
+
+        ImGui::BeginDisabled(!located);
+        if (ImGui::Button("Extract authored placements")) {
+            client::content::placements::ExtractResult extracted{};
+            if (client::content::placements::extract(
+                    destination, g_extractCombatantsOnly, g_extractPublicOnly, extracted)) {
+                g_lastExtract = extracted;
+                g_lastExtractValid = true;
+                publish_map_points();
+            }
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::Checkbox("Combatants only", &g_extractCombatantsOnly);
+        ImGui::SameLine();
+        ImGui::Checkbox("Public areas only", &g_extractPublicOnly);
+
+        if (g_lastExtractValid) {
+            ImGui::TextDisabled(
+                "Extracted: %zu placements, %zu kept, %zu non-combatants, %zu not resident, "
+                "%zu private, %zu overflow%s",
+                g_lastExtract.placements,
+                g_lastExtract.kept,
+                g_lastExtract.notCombatant,
+                g_lastExtract.notResident,
+                g_lastExtract.notPublic,
+                g_lastExtract.overflowed,
+                g_lastExtract.budgetHit ? ", budget hit" : "");
+        }
+
+        constexpr std::array<const char*, 10> kOutcomes{
+            "idle",
+            "placed",
+            "disabled",
+            "no player",
+            "no points",
+            "at target",
+            "none in range",
+            "not resident",
+            "no ground",
+            "spawn failed",
+        };
+        const native::PopulationStatus status = native::population_status();
+        const std::size_t outcomeIndex = static_cast<std::size_t>(status.last) < kOutcomes.size()
+                                             ? static_cast<std::size_t>(status.last)
+                                             : 0;
+        if (status.nearest >= 0.0F) {
+            ImGui::TextDisabled("Map: %zu points | nearest free %.0f | last: %s",
+                                status.points,
+                                static_cast<double>(status.nearest),
+                                kOutcomes[outcomeIndex]);
+        } else {
+            ImGui::TextDisabled(
+                "Map: %zu points | last: %s", status.points, kOutcomes[outcomeIndex]);
+        }
+    }
+
+    ImGui::Separator();
+    ImGui::TextUnformatted("Population settings");
+
+    int target = static_cast<int>(g_population.target);
+    if (ImGui::SliderInt("Live count", &target, 1, 256)) {
+        g_population.target = static_cast<std::uint32_t>(target);
+        changed = true;
+    }
+
+    int interval = static_cast<int>(g_population.intervalMs);
+    if (ImGui::SliderInt("Placement interval (ms)", &interval, 100, 5000)) {
+        g_population.intervalMs = static_cast<std::uint32_t>(interval);
+        changed = true;
+    }
+
+    int respawn = static_cast<int>(g_population.respawnDelayMs);
+    if (ImGui::SliderInt("Respawn delay (ms)", &respawn, 0, 300000)) {
+        g_population.respawnDelayMs = static_cast<std::uint32_t>(respawn);
+        changed = true;
+    }
+
+    changed = ImGui::SliderFloat("Nearest distance", &g_population.minimumRadius, 0.0F, 120.0F)
+              || changed;
+    changed = ImGui::SliderFloat("Furthest distance", &g_population.maximumRadius, 0.0F, 400.0F)
+              || changed;
+    changed = ImGui::SliderFloat("Forget distance", &g_population.forgetRadius, 20.0F, 1200.0F)
+              || changed;
+    changed = ImGui::Checkbox("Snap map points to ground", &g_population.snapToGround) || changed;
+    changed = ImGui::SliderFloat("Ground lift", &g_population.lift, 0.0F, 5.0F) || changed;
+    changed = ImGui::SliderFloat("Entity scale", &g_population.scale, 0.1F, 5.0F) || changed;
+
+    if (g_population.maximumRadius < g_population.minimumRadius) {
+        g_population.maximumRadius = g_population.minimumRadius;
+        changed = true;
+    }
+    const float forgetFloor = g_population.maximumRadius * 1.5F;
+    if (g_population.forgetRadius < forgetFloor) {
+        g_population.forgetRadius = forgetFloor;
+        changed = true;
+    }
+
+    if (ImGui::Button("Forget tracked population")) {
+        native::clear_population_tracking();
+    }
+
+    if (changed) {
+        (void)client::spawn::publish_population(g_population);
+    }
+
+    ImGui::TextDisabled(
+        "Population only tracks spawned entities; leaving an area does not delete objects already "
+        "placed by the game.");
+}
+
 [[nodiscard]] const char* preview(const Column& column) noexcept {
     return column.selected < column.candidates.size()
                ? column.candidates[column.selected].label.data()
@@ -392,18 +671,16 @@ void draw_main_type_filter(spawn_keys::Keybinds& settings, bool& changed) noexce
 
     bool filterChanged = false;
     ImGui::TextDisabled("Checked types are visible");
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,
-                        ImVec2(ImGui::GetStyle().ItemSpacing.x, 2.0F));
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
-                        ImVec2(ImGui::GetStyle().FramePadding.x, 1.0F));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(ImGui::GetStyle().ItemSpacing.x, 2.0F));
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(ImGui::GetStyle().FramePadding.x, 1.0F));
     if (ImGui::BeginTable("type_visibility", 4, ImGuiTableFlags_SizingStretchSame)) {
         const auto drawType = [&](ObjectType type) {
             ImGui::TableNextColumn();
             const std::uint64_t bit = object_type_filter_bit(type);
             bool visible = (settings.hiddenMainTypes & bit) == 0;
             if (ImGui::Checkbox(object_type_name(type), &visible)) {
-                settings.hiddenMainTypes = visible ? settings.hiddenMainTypes & ~bit
-                                                   : settings.hiddenMainTypes | bit;
+                settings.hiddenMainTypes =
+                    visible ? settings.hiddenMainTypes & ~bit : settings.hiddenMainTypes | bit;
                 filterChanged = true;
             }
         };
@@ -444,8 +721,7 @@ void draw_settings(Column& column, const char* id, SpawnAllMode spawnAllMode) no
     ImGui::BeginGroup();
     ImGui::TextUnformatted("Vertical lift:");
     ImGui::SetNextItemWidth(controlWidth);
-    ImGui::DragFloat(
-        "##vertical_lift", &column.settings.lift, 0.1F, -100.0F, 100.0F, "%.1f");
+    ImGui::DragFloat("##vertical_lift", &column.settings.lift, 0.1F, -100.0F, 100.0F, "%.1f");
     ImGui::EndGroup();
 
     ImGui::BeginGroup();
@@ -457,12 +733,7 @@ void draw_settings(Column& column, const char* id, SpawnAllMode spawnAllMode) no
     ImGui::BeginGroup();
     ImGui::TextUnformatted("Ray distance:");
     ImGui::SetNextItemWidth(controlWidth);
-    ImGui::DragFloat("##ray_distance",
-                     &column.settings.rayDistance,
-                     1.0F,
-                     1.0F,
-                     2000.0F,
-                     "%.0f");
+    ImGui::DragFloat("##ray_distance", &column.settings.rayDistance, 1.0F, 1.0F, 2000.0F, "%.0f");
     ImGui::EndGroup();
 
     if (ImGui::TreeNodeEx("Transform", ImGuiTreeNodeFlags_SpanAvailWidth)) {
@@ -480,8 +751,8 @@ void draw_settings(Column& column, const char* id, SpawnAllMode spawnAllMode) no
     }
 
     const bool filterByType = spawnAllMode == SpawnAllMode::selectedType;
-    const char* const spawnAllLabel = filterByType ? "Spawn All of Type [unstable]"
-                                                   : "Spawn All [unstable]";
+    const char* const spawnAllLabel =
+        filterByType ? "Spawn All of Type [unstable]" : "Spawn All [unstable]";
     if (spawnAllMode != SpawnAllMode::none
         && ImGui::TreeNodeEx(spawnAllLabel, ImGuiTreeNodeFlags_SpanAvailWidth)) {
         ImGui::TextUnformatted("Items per row:");
@@ -497,8 +768,8 @@ void draw_settings(Column& column, const char* id, SpawnAllMode spawnAllMode) no
                           ImVec2(-FLT_MIN, 0.0F))) {
             std::vector<std::uint32_t> tags{};
             tags.reserve(column.candidates.size());
-            const ObjectType selectedType = hasSelection ? column.candidates[column.selected].type
-                                                         : ObjectType::Invalid;
+            const ObjectType selectedType =
+                hasSelection ? column.candidates[column.selected].type : ObjectType::Invalid;
             for (const Candidate& candidate : column.candidates) {
                 if (!filterByType || candidate.type == selectedType) {
                     tags.push_back(candidate.tag);
@@ -525,8 +796,8 @@ void draw_keybinds(spawn_keys::Action playerAction,
     if (!ImGui::TreeNodeEx("Keybinds", ImGuiTreeNodeFlags_SpanAvailWidth)) {
         return;
     }
-    const float labelWidth = ImGui::CalcTextSize("At crosshair").x
-                             + ImGui::GetStyle().ItemSpacing.x * 2.0F;
+    const float labelWidth =
+        ImGui::CalcTextSize("At crosshair").x + ImGui::GetStyle().ItemSpacing.x * 2.0F;
     const float controlWidth = ImGui::GetContentRegionAvail().x - labelWidth;
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted("At player");
@@ -598,52 +869,68 @@ void draw() noexcept {
         refresh();
     }
 
-    if (ImGui::Button("Refresh loaded entities")) {
-        refresh();
-    }
-    ImGui::SameLine();
-    ImGui::TextDisabled("%zu main  |  %zu projectiles  |  %zu loot",
-                        g_main.candidates.size(),
-                        g_projectile.candidates.size(),
-                        g_loot.candidates.size());
-    if (native::busy()) {
-        ImGui::SameLine();
-        if (ImGui::Button("Cancel")) {
-            native::cancel();
-        }
-    }
+    if (ImGui::BeginTabBar("spawn_tabs")) {
+        if (ImGui::BeginTabItem("Spawner")) {
+            if (ImGui::Button("Refresh loaded entities")) {
+                refresh();
+                if (g_populationPrimed && g_populationSource == PopulationSource::visibleMain) {
+                    publish_population_source();
+                }
+            }
+            ImGui::SameLine();
+            ImGui::TextDisabled("%zu main  |  %zu projectiles  |  %zu loot",
+                                g_main.candidates.size(),
+                                g_projectile.candidates.size(),
+                                g_loot.candidates.size());
+            if (native::busy()) {
+                ImGui::SameLine();
+                if (ImGui::Button("Cancel")) {
+                    native::cancel();
+                }
+            }
 
-    spawn_keys::Keybinds keybinds = spawn_keys::get();
-    bool keybindsChanged = false;
-    draw_column("Main spawner",
-                "main",
-                g_main,
-                spawn_keys::Action::mainPlayer,
-                spawn_keys::Action::mainCrosshair,
-                true,
-                SpawnAllMode::selectedType,
-                keybinds,
-                keybindsChanged);
-    draw_column("Projectile spawner",
-                "projectile",
-                g_projectile,
-                spawn_keys::Action::projectilePlayer,
-                spawn_keys::Action::projectileCrosshair,
-                false,
-                SpawnAllMode::all,
-                keybinds,
-                keybindsChanged);
-    draw_column("Loot spawner",
-                "loot",
-                g_loot,
-                spawn_keys::Action::lootPlayer,
-                spawn_keys::Action::lootCrosshair,
-                false,
-                SpawnAllMode::all,
-                keybinds,
-                keybindsChanged);
-    if (keybindsChanged) {
-        (void)spawn_keys::publish(keybinds);
+            spawn_keys::Keybinds keybinds = spawn_keys::get();
+            bool keybindsChanged = false;
+            draw_column("Main spawner",
+                        "main",
+                        g_main,
+                        spawn_keys::Action::mainPlayer,
+                        spawn_keys::Action::mainCrosshair,
+                        true,
+                        SpawnAllMode::selectedType,
+                        keybinds,
+                        keybindsChanged);
+            draw_column("Projectile spawner",
+                        "projectile",
+                        g_projectile,
+                        spawn_keys::Action::projectilePlayer,
+                        spawn_keys::Action::projectileCrosshair,
+                        false,
+                        SpawnAllMode::all,
+                        keybinds,
+                        keybindsChanged);
+            draw_column("Loot spawner",
+                        "loot",
+                        g_loot,
+                        spawn_keys::Action::lootPlayer,
+                        spawn_keys::Action::lootCrosshair,
+                        false,
+                        SpawnAllMode::all,
+                        keybinds,
+                        keybindsChanged);
+            if (keybindsChanged) {
+                (void)spawn_keys::publish(keybinds);
+            }
+
+            ImGui::EndTabItem();
+        }
+
+        if (ImGui::BeginTabItem("World Population")) {
+            draw_population_tab();
+            ImGui::EndTabItem();
+        }
+
+        ImGui::EndTabBar();
     }
 }
 

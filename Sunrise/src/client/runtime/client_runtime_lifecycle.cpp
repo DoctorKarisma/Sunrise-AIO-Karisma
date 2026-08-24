@@ -5,13 +5,13 @@
 #include "../hooks/bootflow/bootflow_hook_lifecycle.h"
 #include "../hooks/config_getter/config_getter_lifecycle.h"
 #include "../hooks/cursor/runtime.h"
-#include "../hooks/graphics/graphics_hook_lifecycle.h"
 #include "../hooks/godmode/godmode.h"
+#include "../hooks/graphics/graphics_hook_lifecycle.h"
 #include "../hooks/inactivity/inactivity_override.h"
 #include "../hooks/infinite_ammo/infinite_ammo.h"
 #include "../hooks/network/runtime.h"
-#include "../hooks/noclip/runtime.h"
 #include "../hooks/no_turnback/no_turnback.h"
+#include "../hooks/noclip/runtime.h"
 #include "../hooks/package_trust/package_trust_bypass.h"
 #include "../hooks/polled_input/runtime.h"
 #include "../hooks/queuez/queuez_hook_lifecycle.h"
@@ -21,8 +21,9 @@
 #include "../hooks/world_speed/world_speed.h"
 #include "../inactivity/inactivity_settings_store.h"
 #include "../movement/movement_settings_store.h"
-#include "../spawn/spawn_keybind_store.h"
 #include "../player/player_settings_store.h"
+#include "../spawn/population_settings_store.h"
+#include "../spawn/spawn_keybind_store.h"
 #include "../targets/game.h"
 #include "../targets/steam_targets.h"
 #include "../ui/runtime/client_ui_module_runtime.h"
@@ -36,6 +37,7 @@ bool initialize(void* module) noexcept {
     // Loaded before the pages register, so each page draws saved values on its first frame.
     movement::initialize(module);
     spawn::initialize(module);
+    spawn::initialize_population(module);
     player::initialize(module);
     inactivity::initialize(module);
     return ui::runtime::initialize();
@@ -116,6 +118,7 @@ bool shutdown() noexcept {
     // The reverse of the order the stores initialize in.
     inactivity::shutdown();
     player::shutdown();
+    spawn::shutdown_population();
     spawn::shutdown();
     movement::shutdown();
     core::log::write(core::log::Channel::client, core::log::Level::info, "ev=shutdown result=ok");

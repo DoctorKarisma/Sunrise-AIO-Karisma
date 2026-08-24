@@ -241,6 +241,8 @@ struct PendingSocketPlug {
     std::uint8_t materialRequirementCount{};
     bool profileChanged{};
     bool targetEquipped{};
+    /** True only for Gear Editor writes that bypass ordinary socket restrictions and costs. */
+    bool unrestricted{};
     bool prepared{};
 };
 
@@ -438,6 +440,27 @@ commit_profile_item_acquisition(PendingProfileItemAcquisition& mutation) noexcep
  * @param mutation Gets the checked before/after images without changing account State.
  * @return True when ownership, item detail, lane, plug compatibility, and both loadouts validate.
  */
+/**
+ * Gear Editor: prepares an unrestricted socket-plug change.
+ */
+[[nodiscard]] bool prepare_socket_plug_unrestricted(std::uint64_t targetInstanceSoid,
+                                                    std::uint8_t socketLane,
+                                                    std::uint16_t plugDefinitionIndex,
+                                                    PendingSocketPlug& mutation) noexcept;
+
+/**
+ * Gear Editor: replaces an item definition without normal ownership restrictions.
+ */
+[[nodiscard]] bool
+replace_item_definition_unrestricted(std::uint64_t targetInstanceSoid,
+                                     std::uint32_t replacementDefinitionHash) noexcept;
+
+/**
+ * Gear Editor: inserts an installed item directly into the selected character.
+ */
+[[nodiscard]] bool
+insert_item_definition_unrestricted(std::uint32_t definitionHash,
+                                    std::uint64_t& insertedInstanceSoid) noexcept;
 [[nodiscard]] bool prepare_socket_plug(std::uint64_t targetInstanceSoid,
                                        std::uint8_t socketLane,
                                        std::uint16_t plugDefinitionIndex,

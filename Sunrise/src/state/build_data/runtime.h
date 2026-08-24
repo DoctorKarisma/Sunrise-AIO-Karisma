@@ -35,6 +35,9 @@ struct Source;
 
 namespace sunrise::state::build_data {
 
+/** @return True when the requested socket plug definition is valid. */
+[[nodiscard]] bool is_socket_plug_valid(std::uint16_t plugDefinitionIndex) noexcept;
+
 /**
  * Loads the one build-data cache next to the module, when there is one.
  * Once a snapshot is on disk, later replacements are refused until State restarts. A failed first

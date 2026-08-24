@@ -134,7 +134,9 @@ find_resolved_position(const middleware::datagen::family4::loadout::ResolvedLoad
     std::size_t& movedItemCount) noexcept;
 [[nodiscard]] bool same_character(const CharacterState& left, const CharacterState& right) noexcept;
 /**
- * @param pinnedPlugHash For a rolled socket's apply or re-roll, the result plug an earlier
+ * @param unrestricted True only for Gear Editor writes. Those writes require a valid plug
+ *        definition but bypass ordinary lane compatibility, ownership, and insertion costs.
+ * @param pinnedPlugHash For a normal rolled socket's apply or re-roll, the result plug an earlier
  *        staging rolled, so a re-staging reproduces the same after-image; 0 rolls afresh.
  */
 [[nodiscard]] bool stage_socket_plug(const AccountState& snapshot,
@@ -142,8 +144,27 @@ find_resolved_position(const middleware::datagen::family4::loadout::ResolvedLoad
                                      std::uint64_t targetInstanceSoid,
                                      std::uint8_t socketLane,
                                      std::uint16_t plugDefinitionIndex,
+                                     bool unrestricted,
                                      PendingSocketPlug& mutation,
                                      std::uint32_t pinnedPlugHash = 0) noexcept;
+
+/** Stages a normal native socket mutation with ordinary restrictions enabled. */
+[[nodiscard]] inline bool stage_socket_plug(const AccountState& snapshot,
+                                            std::size_t characterIndex,
+                                            std::uint64_t targetInstanceSoid,
+                                            std::uint8_t socketLane,
+                                            std::uint16_t plugDefinitionIndex,
+                                            PendingSocketPlug& mutation,
+                                            std::uint32_t pinnedPlugHash = 0) noexcept {
+    return stage_socket_plug(snapshot,
+                             characterIndex,
+                             targetInstanceSoid,
+                             socketLane,
+                             plugDefinitionIndex,
+                             false,
+                             mutation,
+                             pinnedPlugHash);
+}
 [[nodiscard]] bool stage_item_state(const AccountState& snapshot,
                                     std::size_t characterIndex,
                                     std::uint64_t targetInstanceSoid,

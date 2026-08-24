@@ -22,6 +22,84 @@ namespace inventory_buckets = build_data::inventory::buckets;
 namespace family4_loadout = middleware::datagen::family4::loadout;
 
 /** Prepares one native-row-checked selected-character inventory insertion. */
+
+bool insert_item_definition_unrestricted(std::uint32_t definitionHash,
+                                         std::uint64_t& insertedInstanceSoid) noexcept {
+    insertedInstanceSoid = 0;
+
+    if (definitionHash == authored_inventory::kNoDefinitionHash) {
+        return false;
+    }
+
+    AcquireSRWLockExclusive(&runtime::storage::g_stateLock);
+
+    AccountState candidate = runtime::storage::g_state.account;
+
+    std::size_t characterIndex = candidate.characterCount;
+    for (std::size_t index = 0; index < candidate.characterCount; ++index) {
+        if (candidate.characters[index].selected) {
+            characterIndex = index;
+            break;
+        }
+    }
+
+    build_data::items::Definition definition{};
+    item_details::Definition detail{};
+
+    if (!account::valid(candidate) || characterIndex >= candidate.characterCount
+        || !build_data::find_item_definition_hash(definitionHash, definition)
+        || !build_data::find_configured_item_detail(definition.definitionIndex, detail)
+        || definition.bucketId != detail.bucketId || !detail.equipmentSlot.has_value()
+        || detail.instancedDefinitionState != item_details::InstancedDefinitionState::instanced) {
+        ReleaseSRWLockExclusive(&runtime::storage::g_stateLock);
+        return false;
+    }
+
+    CharacterState& character = candidate.characters[characterIndex];
+
+    if (character.inventory.count >= character.inventory.values.size()
+        || character.nextInventorySerial
+               >= static_cast<std::uint32_t>((std::numeric_limits<std::int32_t>::max)())) {
+        ReleaseSRWLockExclusive(&runtime::storage::g_stateLock);
+        return false;
+    }
+
+    std::uint64_t instanceSoid = 0;
+    if (!next_item_instance_soid(candidate, instanceSoid)) {
+        ReleaseSRWLockExclusive(&runtime::storage::g_stateLock);
+        return false;
+    }
+
+    authored_inventory::Item inserted{};
+    inserted.instanceSoid = instanceSoid;
+    inserted.definitionHash = definitionHash;
+    inserted.level = acquisition_level(character);
+    inserted.quantity = 1;
+    inserted.mutationSerial = static_cast<std::int32_t>(character.nextInventorySerial++);
+    inserted.sockets.policy = authored_inventory::SocketPolicy::nativeDefaults;
+
+    const std::size_t inventoryIndex = character.inventory.count;
+    character.inventory.values[inventoryIndex] = inserted;
+    ++character.inventory.count;
+
+    family4_loadout::ResolvedLoadout resolved{};
+    std::uint16_t inventoryRow = 0;
+    std::uint8_t equipmentSlot = 0;
+
+    if (!account::valid(candidate)
+        || !family4_loadout::resolve(candidate, characterIndex, resolved)
+        || !find_acquired_row(resolved, instanceSoid, inventoryRow, equipmentSlot)) {
+        ReleaseSRWLockExclusive(&runtime::storage::g_stateLock);
+        return false;
+    }
+
+    runtime::storage::g_state.account = candidate;
+    insertedInstanceSoid = instanceSoid;
+
+    ReleaseSRWLockExclusive(&runtime::storage::g_stateLock);
+    return true;
+}
+
 bool prepare_item_acquisition(std::uint16_t collectibleIndex,
                               std::uint32_t definitionHash,
                               PendingItemAcquisition& mutation) noexcept {

@@ -14,3 +14,8 @@
 # CMake build files
 /build/
 /out/
+
+# Local backup files
+*.bak
+*.backup
+*.pre-gear-editor

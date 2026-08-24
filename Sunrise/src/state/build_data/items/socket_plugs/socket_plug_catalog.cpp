@@ -4,6 +4,7 @@
 #include <bitset>
 
 #include "../../table.h"
+#include "../details/item_detail_catalog.h"
 
 namespace sunrise::state::build_data::items::socket_plugs {
 namespace {
@@ -40,6 +41,7 @@ bool valid(std::span<const Rule> rules,
         || pools.front().memberOffset != 0 || pools.front().memberCount != 0) {
         return false;
     }
+
     for (std::size_t index = 0; index < rules.size(); ++index) {
         const Rule& rule = rules[index];
         if (rule.reserved != 0 || rule.lane >= kLaneCapacity || rule.poolIndex >= pools.size()
@@ -47,14 +49,19 @@ bool valid(std::span<const Rule> rules,
             return false;
         }
     }
+
     std::size_t expectedOffset = 0;
+
     for (std::size_t index = 0; index < pools.size(); ++index) {
         const Pool& pool = pools[index];
+
         if (pool.memberOffset != expectedOffset || (index != 0 && pool.memberCount == 0)
             || pool.memberCount > members.size() - expectedOffset) {
             return false;
         }
+
         const auto range = members.subspan(expectedOffset, pool.memberCount);
+
         if (!std::is_sorted(range.begin(), range.end())
             || std::adjacent_find(range.begin(), range.end()) != range.end()
             || std::any_of(range.begin(), range.end(), [](Member member) {
@@ -62,8 +69,10 @@ bool valid(std::span<const Rule> rules,
                })) {
             return false;
         }
+
         expectedOffset += pool.memberCount;
     }
+
     return expectedOffset == members.size();
 }
 
@@ -74,14 +83,48 @@ bool replace(std::span<const Rule> rules,
     if (!valid(rules, pools, members)) {
         return false;
     }
+
     std::bitset<details::kDefinitionCapacity> membership;
+
+    // Normal selectable socket-plug pool members.
     for (const Member member : members) {
         membership.set(member);
     }
+
+    /*
+     * Fixed/native plugs can exist only as a socket's initial plug and may
+     * therefore never appear in an authored selectable pool.
+     *
+     * The Gear Editor needs these definitions to be recognized as valid
+     * plug definitions so unrestricted socket editing can install them.
+     *
+     * This does NOT change allowed(). Normal socket compatibility remains
+     * exactly as authored by the socket-plug rules.
+     */
+    for (std::size_t definitionIndex = 0; definitionIndex < details::kDefinitionCapacity;
+         ++definitionIndex) {
+        details::Definition detail{};
+
+        if (!details::find(static_cast<std::uint16_t>(definitionIndex), detail)
+            || detail.ordinarySocketState != details::OrdinarySocketState::present) {
+            continue;
+        }
+
+        for (std::size_t lane = 0; lane < detail.ordinarySocketCount; ++lane) {
+            const std::uint16_t initial = detail.initialPlugIndices[lane];
+
+            if (initial != details::kUnavailableItemIndex && initial < membership.size()) {
+                membership.set(initial);
+            }
+        }
+    }
+
     const Lock::Exclusive guard(g_lock);
+
     if (!g_rules.replace(rules) || !g_pools.replace(pools) || !g_members.replace(members)) {
         return false;
     }
+
     g_membership = membership;
     return true;
 }
@@ -93,22 +136,30 @@ bool allowed(std::uint16_t itemDefinitionIndex,
     if (lane >= kLaneCapacity) {
         return false;
     }
+
     const Lock::Shared guard(g_lock);
     const auto rules = g_rules.rows();
     const auto pools = g_pools.rows();
     const auto members = g_members.rows();
+
     const Rule key{itemDefinitionIndex, lane, 0, 0};
+
     const auto found = std::lower_bound(rules.begin(), rules.end(), key, rule_less);
+
     if (found == rules.end() || found->itemDefinitionIndex != itemDefinitionIndex
         || found->lane != lane || found->poolIndex >= pools.size()) {
         return false;
     }
+
     const Pool& pool = pools[found->poolIndex];
+
     if (pool.memberOffset > members.size()
         || pool.memberCount > members.size() - pool.memberOffset) {
         return false;
     }
+
     const auto range = members.subspan(pool.memberOffset, pool.memberCount);
+
     return std::binary_search(range.begin(), range.end(), plugDefinitionIndex);
 }
 
@@ -120,32 +171,41 @@ bool visit_pool(std::uint16_t itemDefinitionIndex,
     if (lane >= kLaneCapacity || visitor == nullptr) {
         return false;
     }
+
     const Lock::Shared guard(g_lock);
     const auto rules = g_rules.rows();
     const auto pools = g_pools.rows();
     const auto members = g_members.rows();
+
     const Rule key{itemDefinitionIndex, lane, 0, 0};
+
     const auto found = std::lower_bound(rules.begin(), rules.end(), key, rule_less);
+
     if (found == rules.end() || found->itemDefinitionIndex != itemDefinitionIndex
         || found->lane != lane || found->poolIndex >= pools.size()) {
         return false;
     }
+
     const Pool& pool = pools[found->poolIndex];
+
     if (pool.memberOffset > members.size()
         || pool.memberCount > members.size() - pool.memberOffset) {
         return false;
     }
+
     for (const Member member : members.subspan(pool.memberOffset, pool.memberCount)) {
         if (!visitor(context, member)) {
             return false;
         }
     }
+
     return true;
 }
 
 /** Answers whether one definition occurs in any installed ordinary-socket plug pool. */
 bool contains(Member plugDefinitionIndex) noexcept {
     const Lock::Shared guard(g_lock);
+
     return plugDefinitionIndex < g_membership.size() && g_membership.test(plugDefinitionIndex);
 }
 
@@ -159,7 +219,9 @@ bool snapshot(std::span<Rule> rules,
     ruleCount = 0;
     poolCount = 0;
     memberCount = 0;
+
     const Lock::Shared guard(g_lock);
+
     return g_rules.snapshot(rules, ruleCount) && g_pools.snapshot(pools, poolCount)
            && g_members.snapshot(members, memberCount);
 }

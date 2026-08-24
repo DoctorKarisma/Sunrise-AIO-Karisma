@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|x64">
@@ -122,6 +122,7 @@
     <ClCompile Include="src\core\settings\state\social_parser.cpp" />
     <ClCompile Include="src\core\runtime\core_runtime.cpp" />
     <ClCompile Include="src\core\runtime\host_environment.cpp" />
+	<ClCompile Include="src\core\ui\toast\ui_toast_runtime.cpp" />
     <ClCompile Include="src\core\ui\modules\ui_module_descriptor.cpp" />
     <ClCompile Include="src\core\ui\modules\registry\ui_module_registry.cpp" />
     <ClCompile Include="src\core\ui\modules\logs\logs_module_runtime.cpp" />
@@ -220,6 +221,8 @@
     <ClCompile Include="src\client\ui\movement\movement_panel.cpp" />
     <ClCompile Include="src\client\movement\movement_settings_store.cpp" />
     <ClCompile Include="src\client\spawn\spawn_keybind_store.cpp" />
+    <ClCompile Include="src\client\spawn\population_settings_store.cpp" />
+    <ClCompile Include="src\client\content\placements\placement_extract.cpp" />
     <ClCompile Include="src\client\content\entity_names\entity_name_build.cpp" />
     <ClCompile Include="src\client\content\entity_names\localized_aliases.cpp" />
     <ClCompile Include="src\client\inactivity\inactivity_settings_store.cpp" />
@@ -509,6 +512,7 @@
     <ClCompile Include="src\server\ui\activity_override\activity_override_panel.cpp" />
     <ClCompile Include="src\server\ui\activity_override\activity_override_lists.cpp" />
     <ClCompile Include="src\server\ui\spawn\spawn_panel.cpp" />
+	<ClCompile Include="src\server\ui\weapon_editor\weapon_editor_panel.cpp" />
     <ClCompile Include="src\server\transport\bap_listener.cpp" />
     <ClCompile Include="src\server\bap\bap_route.cpp" />
     <ClCompile Include="src\server\bap\plaintext.cpp" />
@@ -879,6 +883,7 @@
     <ClInclude Include="src\core\runtime\host_environment.h" />
     <ClInclude Include="src\core\ui\imgui_user_config.h" />
     <ClInclude Include="src\core\ui\modules\ui_module_descriptor.h" />
+	<ClInclude Include="src\core\ui\toast\ui_toast_runtime.h" />
     <ClInclude Include="src\core\ui\modules\registry\ui_module_registry.h" />
     <ClInclude Include="src\core\ui\modules\logs\logs.h" />
     <ClInclude Include="src\client\hooks\cursor\cursor_guard_replacements.h" />
@@ -932,6 +937,8 @@
     <ClInclude Include="src\client\runtime\runtime.h" />
     <ClInclude Include="src\client\movement\movement_settings_store.h" />
     <ClInclude Include="src\client\spawn\spawn_keybind_store.h" />
+    <ClInclude Include="src\client\spawn\population_settings_store.h" />
+    <ClInclude Include="src\client\content\placements\placement_extract.h" />
     <ClInclude Include="src\client\content\entity_names\entity_name_build.h" />
     <ClInclude Include="src\client\content\entity_names\localized_aliases.h" />
     <ClInclude Include="src\client\inactivity\inactivity_settings_store.h" />
@@ -1135,6 +1142,7 @@
     <ClInclude Include="src\server\ui\activity_override\activity_override_panel.h" />
     <ClInclude Include="src\server\ui\activity_override\activity_override_lists.h" />
     <ClInclude Include="src\server\ui\spawn\spawn_panel.h" />
+	<ClInclude Include="src\server\ui\weapon_editor\weapon_editor_panel.h" />
     <ClInclude Include="src\server\bap\runtime.h" />
     <ClInclude Include="src\server\bap\internal.h" />
     <ClInclude Include="src\server\bap\encrypted\internal.h" />

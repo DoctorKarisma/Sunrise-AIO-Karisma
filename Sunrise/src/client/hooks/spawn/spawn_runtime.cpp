@@ -1,6 +1,7 @@
 #include "spawn_runtime.h"
 
 #include <Windows.h>
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -13,7 +14,11 @@
 
 #include "../../../core/logging/log.h"
 #include "../../../core/ui/runtime/ui_visibility_runtime.h"
+#include "../../../state/activity/definition.h"
+#include "../../../state/activity/destination/activity_destination_snapshot.h"
+#include "../../../state/activity/membership/activity_membership_query.h"
 #include "../../hooking/detour.h"
+#include "../../spawn/spawn_keybind_store.h"
 #include "../teleport/runtime.h"
 
 namespace sunrise::client::hooks::spawn {
@@ -47,15 +52,15 @@ using ObjectFactory = std::uint32_t*(__fastcall*)(std::uint32_t*, void*);
 using ObjectTransform = void(__fastcall*)(void*, const float*);
 using TagResolver = const std::byte*(__fastcall*)(std::uint32_t);
 using WorldRaycast = bool(__fastcall*)(const float*,
-                                      const float*,
-                                      const float*,
-                                      const float*,
-                                      std::int32_t,
-                                      std::int32_t,
-                                      float,
-                                      float*,
-                                      float*,
-                                      std::int32_t*);
+                                       const float*,
+                                       const float*,
+                                       const float*,
+                                       std::int32_t,
+                                       std::int32_t,
+                                       float,
+                                       float*,
+                                       float*,
+                                       std::int32_t*);
 using PlayerComponentUpdate = void(__fastcall*)(void*, void*, void*);
 
 struct alignas(16) PlacementStorage {
@@ -105,6 +110,47 @@ SRWLOCK g_shortcutLock{SRWLOCK_INIT};
 std::array<Shortcut, client::spawn::kActionCount> g_shortcuts{};
 std::array<std::atomic_bool, client::spawn::kActionCount> g_shortcutDown{};
 
+/** Placements the populator tracks at once. */
+constexpr std::size_t kPopulationCapacity = 256;
+/** Recorded points one destination map may hold. */
+constexpr std::size_t kPopulationPointCapacity = 2048;
+/** Entity tags the populator draws from. */
+constexpr std::size_t kPopulationTagCapacity = 512;
+constexpr float kGroundProbeUp = 150.0F;
+constexpr float kGroundProbeDown = 400.0F;
+
+struct MapSlot {
+    std::uint32_t tag{kInvalidDatum};
+    std::array<float, 3> position{};
+    std::uint32_t handle{kInvalidDatum};
+    std::uint64_t readyAt{};
+};
+
+struct Tracked {
+    std::uint32_t handle{kInvalidDatum};
+    std::array<float, 3> origin{};
+};
+
+SRWLOCK g_populationLock{SRWLOCK_INIT};
+PopulationSettings g_population{};
+std::array<std::uint32_t, kPopulationTagCapacity> g_populationTags{};
+std::size_t g_populationTagCount{};
+std::array<Tracked, kPopulationCapacity> g_tracked{};
+std::size_t g_trackedCount{};
+std::uint64_t g_nextPlacement{};
+std::uint64_t g_randomState{};
+std::vector<MapSlot> g_points{};
+std::size_t g_mapLive{};
+PlacementOutcome g_lastOutcome{PlacementOutcome::idle};
+float g_nearestFree{-1.0F};
+std::array<float, 3> g_lastPlayer{};
+std::array<float, 3> g_lastPlaced{};
+float g_lastSnap{};
+
+SRWLOCK g_autoLoadLock{SRWLOCK_INIT};
+std::array<char, 64> g_loadedDestination{};
+std::size_t g_loadedDestinationLength{};
+
 template <typename T> [[nodiscard]] bool safe_read(const void* source, T& value) noexcept {
     __try {
         std::memcpy(&value, source, sizeof value);
@@ -139,8 +185,8 @@ void reset_storage(PlacementStorage& storage) noexcept {
     if (handle == kInvalidDatum || g_gameModule == nullptr) {
         return nullptr;
     }
-    std::byte* const descriptor = reinterpret_cast<std::byte*>(g_gameModule)
-                                  + kObjectDatumDescriptorRva;
+    std::byte* const descriptor =
+        reinterpret_cast<std::byte*>(g_gameModule) + kObjectDatumDescriptorRva;
     std::byte* base = nullptr;
     std::uint32_t stride = 0;
     if (!safe_read(descriptor + kObjectDatumBaseOffset, base)
@@ -200,8 +246,7 @@ void service_activations() noexcept {
             __try {
                 g_transform(object, value.transform.data());
                 finished = true;
-            } __except (EXCEPTION_EXECUTE_HANDLER) {
-            }
+            } __except (EXCEPTION_EXECUTE_HANDLER) {}
         }
         if (finished || ++value.attempts >= kActivationAttempts) {
             g_activations[index] = g_activations[--g_activationCount];
@@ -214,8 +259,8 @@ void service_activations() noexcept {
 
 [[nodiscard]] bool camera_rotation(const std::array<float, 3>& forward,
                                    std::array<float, 4>& rotation) noexcept {
-    const float length = forward[0] * forward[0] + forward[1] * forward[1]
-                         + forward[2] * forward[2];
+    const float length =
+        forward[0] * forward[0] + forward[1] * forward[1] + forward[2] * forward[2];
     if (!std::isfinite(length) || length <= 1.0e-8F) {
         return false;
     }
@@ -296,12 +341,8 @@ void service_activations() noexcept {
             return kInvalidDatum;
         }
         const std::array<float, 4> position{world[0], world[1], world[2], scale};
-        std::memcpy(static_cast<std::byte*>(descriptor) + 0x10,
-                    rotation.data(),
-                    sizeof rotation);
-        std::memcpy(static_cast<std::byte*>(descriptor) + 0x20,
-                    position.data(),
-                    sizeof position);
+        std::memcpy(static_cast<std::byte*>(descriptor) + 0x10, rotation.data(), sizeof rotation);
+        std::memcpy(static_cast<std::byte*>(descriptor) + 0x20, position.data(), sizeof position);
         (void)g_factory(&result, descriptor);
         if (result != kInvalidDatum && needs_activation(tag)) {
             queue_activation(result, rotation, position);
@@ -331,11 +372,9 @@ void service_request() noexcept {
     }
 
     std::array<float, 3> position{};
-    bool placed = g_request.origin == Origin::player ? teleport::current_position(position)
-                                                     : crosshair_hit(g_request.settings.rayDistance,
-                                                                     camera,
-                                                                     forward,
-                                                                     position);
+    bool placed = g_request.origin == Origin::player
+                      ? teleport::current_position(position)
+                      : crosshair_hit(g_request.settings.rayDistance, camera, forward, position);
     if (!placed) {
         g_request = {};
         ReleaseSRWLockExclusive(&g_requestLock);
@@ -349,18 +388,18 @@ void service_request() noexcept {
     if (g_request.line) {
         const std::uint32_t width = (std::max)(g_request.itemsPerRow, 1U);
         const float horizontalLength = std::sqrt(forward[0] * forward[0] + forward[1] * forward[1]);
-        const std::array<float, 3> rowForward = horizontalLength > 1.0e-5F
-                                                   ? std::array<float, 3>{forward[0] / horizontalLength,
-                                                                          forward[1] / horizontalLength,
-                                                                          0.0F}
-                                                   : std::array<float, 3>{1.0F, 0.0F, 0.0F};
+        const std::array<float, 3> rowForward =
+            horizontalLength > 1.0e-5F ? std::array<float, 3>{forward[0] / horizontalLength,
+                                                              forward[1] / horizontalLength,
+                                                              0.0F}
+                                       : std::array<float, 3>{1.0F, 0.0F, 0.0F};
         const std::array<float, 3> right{-rowForward[1], rowForward[0], 0.0F};
         const float column = static_cast<float>(cursor % width);
         const float row = static_cast<float>(cursor / width);
-        position[0] += right[0] * column * g_request.spacing
-                       + rowForward[0] * row * g_request.spacing;
-        position[1] += right[1] * column * g_request.spacing
-                       + rowForward[1] * row * g_request.spacing;
+        position[0] +=
+            right[0] * column * g_request.spacing + rowForward[0] * row * g_request.spacing;
+        position[1] +=
+            right[1] * column * g_request.spacing + rowForward[1] * row * g_request.spacing;
     }
     if (g_request.cursor >= total) {
         g_request = {};
@@ -387,13 +426,13 @@ void poll_shortcuts() noexcept {
     if (foreground != nullptr) {
         (void)GetWindowThreadProcessId(foreground, &foregroundProcess);
     }
-    const bool blocked = foregroundProcess != GetCurrentProcessId()
-                         || core::ui::runtime::snapshot().visible;
+    const bool blocked =
+        foregroundProcess != GetCurrentProcessId() || core::ui::runtime::snapshot().visible;
 
     for (std::size_t index = 0; index < keybinds.virtualKeys.size(); ++index) {
         const std::uint32_t key = keybinds.virtualKeys[index];
-        const bool down = key != client::spawn::kNoKey
-                          && (GetAsyncKeyState(static_cast<int>(key)) & 0x8000) != 0;
+        const bool down =
+            key != client::spawn::kNoKey && (GetAsyncKeyState(static_cast<int>(key)) & 0x8000) != 0;
         if (blocked) {
             g_shortcutDown[index].store(down, std::memory_order_relaxed);
             continue;
@@ -417,6 +456,313 @@ void poll_shortcuts() noexcept {
     }
 }
 
+[[nodiscard]] std::uint64_t next_random() noexcept {
+    if (g_randomState == 0) {
+        g_randomState = GetTickCount64() | 1ULL;
+    }
+    g_randomState ^= g_randomState >> 12;
+    g_randomState ^= g_randomState << 25;
+    g_randomState ^= g_randomState >> 27;
+    return g_randomState * 0x2545F4914F6CDD1DULL;
+}
+
+[[nodiscard]] float random_unit() noexcept {
+    constexpr float kScale = 1.0F / 16777216.0F;
+    return static_cast<float>(next_random() >> 40) * kScale;
+}
+
+[[nodiscard]] float planar_distance_squared(const std::array<float, 3>& first,
+                                            const std::array<float, 3>& second) noexcept {
+    const float x = first[0] - second[0];
+    const float y = first[1] - second[1];
+    return x * x + y * y;
+}
+
+[[nodiscard]] bool ground_below(const std::array<float, 3>& candidate,
+                                std::array<float, 3>& output) noexcept {
+    if (g_raycast == nullptr) {
+        return false;
+    }
+
+    std::array<float, 4> up{0.0F, 0.0F, 1.0F, 0.0F};
+    std::array<float, 4> start{candidate[0], candidate[1], candidate[2] + kGroundProbeUp, 0.0F};
+    std::array<float, 4> end{candidate[0], candidate[1], candidate[2] - kGroundProbeDown, 0.0F};
+    std::array<float, 4> hit = end;
+    float fraction = 1.0F;
+    std::int32_t material = -1;
+    std::uint32_t controlled = kInvalidDatum;
+    (void)teleport::current_controlled_handle(controlled);
+    const std::int32_t ignored =
+        controlled == kInvalidDatum ? -1 : static_cast<std::int32_t>(controlled);
+
+    bool result = false;
+    __try {
+        result = g_raycast(up.data(),
+                           up.data(),
+                           start.data(),
+                           end.data(),
+                           ignored,
+                           ignored,
+                           0.0F,
+                           &fraction,
+                           hit.data(),
+                           &material);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        result = false;
+    }
+
+    if (!result || !std::isfinite(hit[0]) || !std::isfinite(hit[1]) || !std::isfinite(hit[2])) {
+        return false;
+    }
+
+    output = {hit[0], hit[1], hit[2]};
+    return true;
+}
+
+void prune_population(const std::array<float, 3>& player, float forgetRadius) noexcept {
+    const float limit = forgetRadius * forgetRadius;
+    std::size_t index = 0;
+    while (index < g_trackedCount) {
+        const Tracked& value = g_tracked[index];
+        const bool gone = resolve_object(value.handle) == nullptr;
+        const bool distant = planar_distance_squared(player, value.origin) > limit;
+        if (gone || distant) {
+            g_tracked[index] = g_tracked[--g_trackedCount];
+            continue;
+        }
+        ++index;
+    }
+}
+
+[[nodiscard]] bool place_one(const std::array<float, 3>& player,
+                             const PopulationSettings& settings) noexcept {
+    if (g_populationTagCount == 0 || g_trackedCount >= g_tracked.size()) {
+        return false;
+    }
+
+    const std::uint32_t tag =
+        g_populationTags[static_cast<std::size_t>(next_random() % g_populationTagCount)];
+    if (!is_tag_resident(tag)) {
+        return false;
+    }
+
+    constexpr float kTwoPi = 6.28318530718F;
+    const float angle = random_unit() * kTwoPi;
+    const float span = settings.maximumRadius - settings.minimumRadius;
+    const float radius = settings.minimumRadius + random_unit() * span;
+    const std::array<float, 3> candidate{
+        player[0] + std::cos(angle) * radius, player[1] + std::sin(angle) * radius, player[2]};
+
+    std::array<float, 3> ground{};
+    if (!ground_below(candidate, ground)) {
+        return false;
+    }
+    ground[2] += settings.lift;
+
+    constexpr std::array<float, 4> upright{0.0F, 0.0F, 0.0F, 1.0F};
+    const std::uint32_t handle = spawn_one(tag, ground, upright, settings.scale);
+    if (handle == kInvalidDatum) {
+        return false;
+    }
+
+    g_tracked[g_trackedCount++] = Tracked{handle, ground};
+    return true;
+}
+
+void prune_map(const std::array<float, 3>& player,
+               const PopulationSettings& settings,
+               std::uint64_t now) noexcept {
+    const float forget = settings.forgetRadius * settings.forgetRadius;
+    g_mapLive = 0;
+
+    for (MapSlot& slot : g_points) {
+        if (slot.handle == kInvalidDatum) {
+            continue;
+        }
+
+        if (resolve_object(slot.handle) == nullptr) {
+            slot.handle = kInvalidDatum;
+            slot.readyAt = now + settings.respawnDelayMs;
+            continue;
+        }
+
+        if (planar_distance_squared(player, slot.position) > forget) {
+            slot.handle = kInvalidDatum;
+            continue;
+        }
+
+        ++g_mapLive;
+    }
+}
+
+[[nodiscard]] bool place_from_map(const std::array<float, 3>& player,
+                                  const PopulationSettings& settings,
+                                  std::uint64_t now) noexcept {
+    const float minimum = settings.minimumRadius * settings.minimumRadius;
+    const float maximum = settings.maximumRadius * settings.maximumRadius;
+
+    std::size_t chosen = g_points.size();
+    std::size_t seen = 0;
+    g_nearestFree = -1.0F;
+
+    for (std::size_t index = 0; index < g_points.size(); ++index) {
+        const MapSlot& slot = g_points[index];
+        if (slot.handle != kInvalidDatum || now < slot.readyAt) {
+            continue;
+        }
+
+        const float distanceSquared = planar_distance_squared(player, slot.position);
+        const float distance = std::sqrt(distanceSquared);
+        if (g_nearestFree < 0.0F || distance < g_nearestFree) {
+            g_nearestFree = distance;
+        }
+        if (distanceSquared < minimum || distanceSquared > maximum) {
+            continue;
+        }
+
+        ++seen;
+        if (next_random() % seen == 0) {
+            chosen = index;
+        }
+    }
+
+    if (chosen >= g_points.size()) {
+        g_lastOutcome = PlacementOutcome::noneInRange;
+        return false;
+    }
+
+    MapSlot& slot = g_points[chosen];
+    if (!is_tag_resident(slot.tag)) {
+        slot.readyAt = now + settings.intervalMs * 8ULL;
+        g_lastOutcome = PlacementOutcome::notResident;
+        return false;
+    }
+
+    std::array<float, 3> position = slot.position;
+    g_lastSnap = 0.0F;
+    if (settings.snapToGround) {
+        std::array<float, 3> ground{};
+        if (!ground_below(position, ground)) {
+            slot.readyAt = now + settings.intervalMs * 4ULL;
+            g_lastOutcome = PlacementOutcome::noGround;
+            return false;
+        }
+        g_lastSnap = ground[2] - position[2];
+        position = ground;
+    }
+
+    position[2] += settings.lift;
+    g_lastPlaced = position;
+    constexpr std::array<float, 4> upright{0.0F, 0.0F, 0.0F, 1.0F};
+    const std::uint32_t handle = spawn_one(slot.tag, position, upright, settings.scale);
+    if (handle == kInvalidDatum) {
+        g_lastOutcome = PlacementOutcome::spawnFailed;
+        return false;
+    }
+
+    slot.handle = handle;
+    ++g_mapLive;
+    g_lastOutcome = PlacementOutcome::placed;
+    return true;
+}
+
+void service_auto_load() noexcept {
+    const PopulationSettings settings = population();
+    if (!settings.autoOnLoad) {
+        return;
+    }
+
+    const std::uint64_t sessionId =
+        state::activity::membership::live_region_session(state::activity::kAbsentSessionId);
+    if (sessionId == state::activity::kAbsentSessionId) {
+        return;
+    }
+
+    state::activity::destination::DestinationSelection selection{};
+    if (!state::activity::destination::snapshot(sessionId, selection)
+        || selection.packageNameLength == 0) {
+        return;
+    }
+
+    const std::string_view destination(reinterpret_cast<const char*>(selection.packageName.data()),
+                                       selection.packageNameLength);
+
+    AcquireSRWLockExclusive(&g_autoLoadLock);
+    const std::string_view loaded(g_loadedDestination.data(), g_loadedDestinationLength);
+    const bool arrived = destination != loaded && destination.size() <= g_loadedDestination.size();
+    if (arrived) {
+        g_loadedDestination = {};
+        std::copy(destination.begin(), destination.end(), g_loadedDestination.begin());
+        g_loadedDestinationLength = destination.size();
+    }
+    ReleaseSRWLockExclusive(&g_autoLoadLock);
+
+    if (!arrived) {
+        return;
+    }
+
+    std::vector<PopulationPoint> points{};
+    if (client::spawn::load_map(destination)) {
+        std::vector<client::spawn::MapPoint> stored(client::spawn::map_size());
+        const std::size_t count = client::spawn::copy_map(stored);
+        points.reserve(count);
+        for (std::size_t index = 0; index < count; ++index) {
+            points.push_back(PopulationPoint{stored[index].tag, stored[index].position});
+        }
+    }
+
+    set_population_points(points);
+    PopulationSettings armed = population();
+    armed.useMap = true;
+    armed.enabled = !points.empty();
+    configure_population(armed);
+}
+
+void service_population() noexcept {
+    AcquireSRWLockExclusive(&g_populationLock);
+    const PopulationSettings settings = g_population;
+    if (!settings.enabled) {
+        g_lastOutcome = PlacementOutcome::disabled;
+        ReleaseSRWLockExclusive(&g_populationLock);
+        return;
+    }
+
+    const std::uint64_t now = GetTickCount64();
+    if (now < g_nextPlacement) {
+        ReleaseSRWLockExclusive(&g_populationLock);
+        return;
+    }
+    g_nextPlacement = now + settings.intervalMs;
+
+    std::array<float, 3> player{};
+    g_lastOutcome = PlacementOutcome::noPlayer;
+    if (teleport::current_position(player)) {
+        g_lastPlayer = player;
+        if (settings.useMap) {
+            prune_map(player, settings, now);
+            if (g_points.empty()) {
+                g_lastOutcome = PlacementOutcome::noPoints;
+            } else if (g_mapLive >= settings.target) {
+                g_lastOutcome = PlacementOutcome::atTarget;
+            } else {
+                (void)place_from_map(player, settings, now);
+            }
+        } else {
+            prune_population(player, settings.forgetRadius);
+            if (g_trackedCount >= settings.target) {
+                g_lastOutcome = PlacementOutcome::atTarget;
+            } else if (g_populationTagCount == 0) {
+                g_lastOutcome = PlacementOutcome::noPoints;
+            } else {
+                g_lastOutcome = place_one(player, settings) ? PlacementOutcome::placed
+                                                            : PlacementOutcome::spawnFailed;
+            }
+        }
+    }
+
+    ReleaseSRWLockExclusive(&g_populationLock);
+}
+
 void __fastcall player_component_update(void* object, void* input, void* authored) noexcept {
     const auto next = reinterpret_cast<PlayerComponentUpdate>(g_updateHook.original);
     if (next != nullptr) {
@@ -426,16 +772,17 @@ void __fastcall player_component_update(void* object, void* input, void* authore
         poll_shortcuts();
         service_activations();
         service_request();
+        service_auto_load();
+        service_population();
     }
 }
 
 [[nodiscard]] bool valid_settings(const Settings& settings) noexcept {
     return std::isfinite(settings.lift) && std::isfinite(settings.rayDistance)
-           && settings.rayDistance > 0.0F && std::isfinite(settings.scale)
-           && settings.scale > 0.0F
-           && std::all_of(settings.offset.begin(), settings.offset.end(), [](float value) {
-                  return std::isfinite(value);
-              })
+           && settings.rayDistance > 0.0F && std::isfinite(settings.scale) && settings.scale > 0.0F
+           && std::all_of(settings.offset.begin(),
+                          settings.offset.end(),
+                          [](float value) { return std::isfinite(value); })
            && std::all_of(settings.rotation.begin(), settings.rotation.end(), [](float value) {
                   return std::isfinite(value);
               });
@@ -462,8 +809,8 @@ bool install() noexcept {
     g_resolver = reinterpret_cast<TagResolver>(base + kTagResolverRva);
     g_raycast = reinterpret_cast<WorldRaycast>(base + kWorldRaycastRva);
     void* const update = base + kPlayerComponentUpdateRva;
-    if (!hooking::detour::install(
-            {update, reinterpret_cast<void*>(&player_component_update)}, g_updateHook)) {
+    if (!hooking::detour::install({update, reinterpret_cast<void*>(&player_component_update)},
+                                  g_updateHook)) {
         uninstall();
         core::log::write(core::log::Channel::client,
                          core::log::Level::warn,
@@ -471,9 +818,8 @@ bool install() noexcept {
         return false;
     }
     g_installed.store(true, std::memory_order_release);
-    core::log::write(core::log::Channel::client,
-                     core::log::Level::info,
-                     "ev=spawn stage=install result=ok");
+    core::log::write(
+        core::log::Channel::client, core::log::Level::info, "ev=spawn stage=install result=ok");
     return true;
 }
 
@@ -492,6 +838,24 @@ void uninstall() noexcept {
     AcquireSRWLockExclusive(&g_activationLock);
     g_activationCount = 0;
     ReleaseSRWLockExclusive(&g_activationLock);
+    AcquireSRWLockExclusive(&g_populationLock);
+    g_population = {};
+    g_populationTagCount = 0;
+    g_trackedCount = 0;
+    g_points.clear();
+    g_mapLive = 0;
+    g_nextPlacement = 0;
+    g_lastOutcome = PlacementOutcome::idle;
+    g_nearestFree = -1.0F;
+    g_lastPlayer = {};
+    g_lastPlaced = {};
+    g_lastSnap = 0.0F;
+    ReleaseSRWLockExclusive(&g_populationLock);
+    AcquireSRWLockExclusive(&g_autoLoadLock);
+    g_loadedDestination = {};
+    g_loadedDestinationLength = 0;
+    ReleaseSRWLockExclusive(&g_autoLoadLock);
+
     AcquireSRWLockExclusive(&g_shortcutLock);
     g_shortcuts = {};
     ReleaseSRWLockExclusive(&g_shortcutLock);
@@ -611,6 +975,100 @@ void cancel() noexcept {
     AcquireSRWLockExclusive(&g_requestLock);
     g_request = {};
     ReleaseSRWLockExclusive(&g_requestLock);
+}
+
+[[nodiscard]] bool valid_population(const PopulationSettings& settings) noexcept {
+    return std::isfinite(settings.minimumRadius) && std::isfinite(settings.maximumRadius)
+           && std::isfinite(settings.forgetRadius) && std::isfinite(settings.lift)
+           && std::isfinite(settings.scale) && settings.minimumRadius >= 0.0F
+           && settings.maximumRadius >= settings.minimumRadius && settings.forgetRadius > 0.0F
+           && settings.scale > 0.0F && settings.target <= kPopulationCapacity
+           && settings.intervalMs > 0;
+}
+
+void configure_population(const PopulationSettings& settings) noexcept {
+    if (!valid_population(settings)) {
+        return;
+    }
+    AcquireSRWLockExclusive(&g_populationLock);
+    g_population = settings;
+    ReleaseSRWLockExclusive(&g_populationLock);
+}
+
+PopulationSettings population() noexcept {
+    AcquireSRWLockShared(&g_populationLock);
+    const PopulationSettings result = g_population;
+    ReleaseSRWLockShared(&g_populationLock);
+    return result;
+}
+
+void set_population_tags(std::span<const std::uint32_t> tags) noexcept {
+    AcquireSRWLockExclusive(&g_populationLock);
+    g_populationTagCount = (std::min)(tags.size(), g_populationTags.size());
+    std::copy_n(tags.begin(), g_populationTagCount, g_populationTags.begin());
+    ReleaseSRWLockExclusive(&g_populationLock);
+}
+
+std::size_t population_live() noexcept {
+    AcquireSRWLockShared(&g_populationLock);
+    const std::size_t result = g_population.useMap ? g_mapLive : g_trackedCount;
+    ReleaseSRWLockShared(&g_populationLock);
+    return result;
+}
+
+std::size_t population_source_count() noexcept {
+    AcquireSRWLockShared(&g_populationLock);
+    const std::size_t result = g_populationTagCount;
+    ReleaseSRWLockShared(&g_populationLock);
+    return result;
+}
+
+void set_population_points(std::span<const PopulationPoint> points) noexcept {
+    const std::size_t count = (std::min)(points.size(), kPopulationPointCapacity);
+    AcquireSRWLockExclusive(&g_populationLock);
+    g_points.clear();
+    g_points.reserve(count);
+    for (std::size_t index = 0; index < count; ++index) {
+        MapSlot slot{};
+        slot.tag = points[index].tag;
+        slot.position = points[index].position;
+        g_points.push_back(slot);
+    }
+    g_mapLive = 0;
+    g_nearestFree = -1.0F;
+    ReleaseSRWLockExclusive(&g_populationLock);
+}
+
+std::size_t population_point_count() noexcept {
+    AcquireSRWLockShared(&g_populationLock);
+    const std::size_t result = g_points.size();
+    ReleaseSRWLockShared(&g_populationLock);
+    return result;
+}
+
+PopulationStatus population_status() noexcept {
+    AcquireSRWLockShared(&g_populationLock);
+    PopulationStatus status{};
+    status.points = g_points.size();
+    status.live = g_mapLive;
+    status.nearest = g_nearestFree;
+    status.last = g_lastOutcome;
+    status.player = g_lastPlayer;
+    status.placed = g_lastPlaced;
+    status.snapped = g_lastSnap;
+    ReleaseSRWLockShared(&g_populationLock);
+    return status;
+}
+
+void clear_population_tracking() noexcept {
+    AcquireSRWLockExclusive(&g_populationLock);
+    g_trackedCount = 0;
+    for (MapSlot& slot : g_points) {
+        slot.handle = kInvalidDatum;
+        slot.readyAt = 0;
+    }
+    g_mapLive = 0;
+    ReleaseSRWLockExclusive(&g_populationLock);
 }
 
 } // namespace sunrise::client::hooks::spawn
