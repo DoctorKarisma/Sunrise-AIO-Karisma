@@ -41,6 +41,10 @@ namespace {
 constexpr std::uint8_t kEquippedShaderModelSocketKind = 0;
 /** Index stored when no definition resolves. The catalog is u16-indexed, so this cannot be one. */
 constexpr std::uint32_t kUnavailableDefinitionIndex = (std::numeric_limits<std::uint16_t>::max)();
+/** Repeatable bounties a character may hold from one vendor at once, as retail allows. */
+constexpr std::uint32_t kRepeatableHoldLimit = 5;
+/** Authored repeatable pool ceiling. The largest set in the manifest is Eva's Dawning, at 22. */
+constexpr std::size_t kRepeatablePoolCapacity = 64;
 
 } // namespace
 
@@ -840,6 +844,125 @@ void report_purchase(std::uint16_t opcode,
     return false;
 }
 
+/**
+ * Rolls one random unheld repeatable bounty, for a row that offers "additional bounties".
+ *
+ * That row sells a Dummy placeholder like a reputation turn-in does - granting it is what put an
+ * "Additional Bounties" item in the inventory, and because the placeholder sits in the Quests
+ * bucket the client then treated the row as owned and stopped offering it. The row is meant to
+ * hand out a real bounty, repeatably.
+ *
+ * What it owes is a REPEATABLE bounty, which is a distinct kind: the row costs 3000 glimmer where
+ * the same vendor's daily costs 250, and a character may hold five of them at once.
+ *
+ * The pool has to be authored by hash, because a repeatable bounty is not a sale row. No vendor in
+ * the manifest lists one - they exist only as item definitions - so there is nothing to discover on
+ * the vendor and nothing a category could name. That is also why picking from the vendor's own
+ * rows, however well it reads, could never produce the right item: it can only ever return
+ * something the vendor sells, and the vendor does not sell these.
+ *
+ * Rules are keyed by the vendor's definition hash rather than its row: the row is a position in
+ * this build's package table, while the hash is the vendor's own identity, so a rule can be
+ * authored for any vendor without anyone having to discover its index first. The trigger category
+ * is part of the key, because one vendor can own several such rows - Eva Levante has four, one per
+ * event, each owing that event's own pool.
+ *
+ * Configured by `vendor_bounty_roll.txt`:
+ * `<vendorDefinitionHash> <triggerCategory> <repeatableItemHash>...`, hashes in hex and the trigger
+ * in decimal. A key may span several lines and they accumulate, so a long pool stays readable.
+ *
+ * An authored hash that this build does not carry is skipped rather than refused, so a pool taken
+ * from a newer manifest degrades to the items that do exist instead of failing whole.
+ *
+ * @param vendorIndex Vendor the purchase names.
+ * @param categoryIndex Category of the purchased row, from sale row +100.
+ * @param rolledItemIndex Receives the bounty to grant.
+ * @return True when this row is a bounty roll and its own item must NOT be granted.
+ */
+[[nodiscard]] bool roll_vendor_bounty(std::int32_t vendorIndex,
+                                      std::int32_t categoryIndex,
+                                      std::uint16_t& rolledItemIndex) noexcept {
+    namespace vendor_domain = state::build_data::vendors;
+    rolledItemIndex = kUnavailableDefinitionIndex;
+    if (vendorIndex < 0 || categoryIndex < 0) {
+        return false;
+    }
+    vendor_domain::IndexEntry entry{};
+    if (!vendor_domain::find_index(static_cast<std::uint16_t>(vendorIndex), entry)) {
+        return false;
+    }
+    static std::array<char, core::rule_text::kRuleTextCapacity> text{};
+    if (!core::path::read_artifact_text(L"vendor_bounty_roll.txt", text)) {
+        return false;
+    }
+    // Every hash authored for this exact key. Lines carrying the same key accumulate, so the pool
+    // is gathered from the whole file rather than from the first line that matches.
+    std::array<std::uint32_t, kRepeatablePoolCapacity> pool{};
+    std::size_t poolCount = 0;
+    core::rule_text::Cursor rules{text.data()};
+    while (rules.seek_field()) {
+        const std::uint32_t ruleHash = rules.read_hex();
+        const std::int32_t ruleCategory = rules.read_decimal();
+        const bool wanted = ruleHash == entry.definitionHash && ruleCategory == categoryIndex;
+        // The rest of the line is item hashes. A newline is not a rule field, so this stops at the
+        // end of the line without needing to look for one.
+        while (rules.at_field()) {
+            const std::uint32_t itemHash = rules.read_hex();
+            if (wanted && poolCount < pool.size()) {
+                pool[poolCount++] = itemHash;
+            }
+        }
+    }
+    if (poolCount == 0) {
+        return false;
+    }
+    // Reservoir pick over what this build actually carries and the character does not already hold,
+    // so the pool is walked once and no count is needed up front.
+    std::uint32_t resolved = 0;
+    std::uint32_t held = 0;
+    std::uint32_t candidates = 0;
+    std::uint64_t seed = GetTickCount64();
+    // One account view for the whole pool. Reading it copies the whole account, and the pool is
+    // walked candidate by candidate, so taking it per candidate would copy it dozens of times to
+    // answer dozens of questions about the same unchanging view.
+    const state::AccountState account = state::account_snapshot();
+    for (std::size_t at = 0; at < poolCount; ++at) {
+        state::build_data::items::Definition item{};
+        if (!state::build_data::items::find_hash(pool[at], item)) {
+            continue;
+        }
+        ++resolved;
+        if (state::account::holds_pursuit(account, item.definitionIndex)) {
+            ++held;
+            continue;
+        }
+        ++candidates;
+        seed = (seed * 6364136223846793005ULL) + 1442695040888963407ULL;
+        if ((seed >> 33) % candidates == 0) {
+            rolledItemIndex = item.definitionIndex;
+        }
+    }
+    // Retail lets a character keep five of a vendor's repeatables at once. Refusing here rather
+    // than at the grant keeps the roll from consuming a pick it would only have to throw away.
+    if (held >= kRepeatableHoldLimit) {
+        rolledItemIndex = kUnavailableDefinitionIndex;
+    }
+    std::array<char, core::log::kLineCapacity> line{};
+    const int used = std::snprintf(line.data(), line.size(),
+                                   "ev=bounty_roll stage=pick vendor=%d hash=0x%08X category=%d "
+                                   "authored=%u resolved=%u held=%u pool=%u item=%d",
+                                   vendorIndex, entry.definitionHash, categoryIndex,
+                                   static_cast<unsigned>(poolCount), resolved, held, candidates,
+                                   rolledItemIndex == kUnavailableDefinitionIndex
+                                       ? -1
+                                       : static_cast<int>(rolledItemIndex));
+    if (used > 0) {
+        core::log::write(core::log::Channel::server, core::log::Level::info,
+                         {line.data(), static_cast<std::size_t>(used)});
+    }
+    return true;
+}
+
 /** Resolves one vendor sale row to the item it sells and the category it belongs to. */
 [[nodiscard]] bool resolve_vendor_row(std::int32_t vendorIndex,
                                       std::int32_t rowIndex,
@@ -1415,6 +1538,8 @@ constexpr std::uint32_t kAbsentNameHash = 0x811C9DC5U;
 
 /** What one resolved vendor row turned out to be, once it was settled. */
 enum class RowOutcome : std::uint8_t {
+    /** The row rolled a bounty from an authored pool. */
+    bountyRoll,
     /** The row was a reputation turn-in. */
     reputation,
     /** The row granted the item it names, or the item it stands for. */
@@ -1424,7 +1549,7 @@ enum class RowOutcome : std::uint8_t {
 /**
  * Settles one resolved vendor row, in the order a row's behaviours are tried.
  *
- * Both vendor opcodes end here. A row is one of two things, and which it is cannot be read off the
+ * Both vendor opcodes end here. A row is one of three things, and which it is cannot be read off the
  * row itself - each is recognised by an authored rule keyed to the vendor, so they are tried in
  * turn and the first that claims the row owns it. Keeping that order in one place is what stops the
  * two opcodes drifting: a behaviour taught to one and not the other is the shape of bug this path
@@ -1446,6 +1571,22 @@ RowOutcome settle_vendor_row(const middleware::web_service::Message& message,
                              std::int32_t categoryIndex,
                              std::uint16_t itemDefinitionIndex,
                              Outcome& outcome) noexcept {
+    std::uint16_t rolledBounty = kUnavailableDefinitionIndex;
+    if (roll_vendor_bounty(vendorIndex, categoryIndex, rolledBounty)) {
+        report_purchase(opcode,
+                        "ok",
+                        rolledBounty == kUnavailableDefinitionIndex ? "bounty_pool_empty"
+                                                                   : "bounty_roll",
+                        vendorIndex,
+                        rowIndex,
+                        itemDefinitionIndex);
+        if (rolledBounty != kUnavailableDefinitionIndex) {
+            std::uint16_t rolledCollectible = state::build_data::collectibles::kNoCollectibleIndex;
+            (void)find_collectible_for_item(rolledBounty, rolledCollectible);
+            grant_item_definition(message, rolledCollectible, rolledBounty, outcome);
+        }
+        return RowOutcome::bountyRoll;
+    }
     if (credit_vendor_reputation(vendorIndex, categoryIndex)) {
         report_purchase(opcode, "ok", "reputation", vendorIndex, rowIndex, itemDefinitionIndex);
         // Granting nothing means preparing no transaction, so nothing would re-encode the
@@ -1529,7 +1670,7 @@ void acquire_quest(const middleware::web_service::Message& message, Outcome& out
                                                  questCategoryIndex,
                                                  itemDefinitionIndex,
                                                  outcome);
-    // Only a row that handed over the quest it offered answers the banner. A reputation credit leaves
+    // Only a row that handed over the quest it offered answers the banner. A bounty roll and a reputation credit both leave
     // the banner's own question unanswered, so it stays up.
     if (settled != RowOutcome::granted) {
         return;

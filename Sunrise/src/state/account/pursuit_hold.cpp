@@ -51,6 +51,11 @@ void report_classification(std::uint16_t itemDefinitionIndex,
 
 /** Reports whether an item is a pursuit the selected character already holds. */
 bool holds_pursuit(std::uint16_t itemDefinitionIndex) noexcept {
+    return holds_pursuit(account_snapshot(), itemDefinitionIndex);
+}
+
+/** The same rule, against an account view the caller already holds. */
+bool holds_pursuit(const AccountState& account, std::uint16_t itemDefinitionIndex) noexcept {
     detail_domain::Definition detail{};
     if (!build_data::find_configured_item_detail(itemDefinitionIndex, detail)) {
         return false;
@@ -63,9 +68,8 @@ bool holds_pursuit(std::uint16_t itemDefinitionIndex) noexcept {
     if (!build_data::find_item_definition_index(itemDefinitionIndex, definition)) {
         return false;
     }
-    const AccountState snapshot = account_snapshot();
-    for (std::size_t index = 0; index < snapshot.characterCount; ++index) {
-        const CharacterState& character = snapshot.characters[index];
+    for (std::size_t index = 0; index < account.characterCount; ++index) {
+        const CharacterState& character = account.characters[index];
         if (!character.selected) {
             continue;
         }
