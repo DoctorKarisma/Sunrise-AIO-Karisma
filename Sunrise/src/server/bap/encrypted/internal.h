@@ -100,6 +100,8 @@ struct ServiceOutcome {
     queuez::ChangeCharacter changeCharacter{};
     bool hasSelectCharacter{};
     queuez::SelectCharacter selectCharacter{};
+    /** Replicated character state changed with no transaction; the peer needs its own resync. */
+    bool requiresSelfResync{};
     /** One service owns at most one independently versioned transaction. */
     using Transaction = std::variant<std::monostate,
                                      state::activity::PendingAllocation,

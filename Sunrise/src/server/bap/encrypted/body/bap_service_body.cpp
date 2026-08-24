@@ -536,6 +536,7 @@ bool process(const ServiceRoute& route,
             }
         }
 
+        outcome.requiresSelfResync = webOutcome.requiresSelfResync;
         if (webOutcome.hasSelectedCharacter
             && queuez::stage_select_character(
                 queuezState, webOutcome.selectedCharacterSoid, outcome.selectCharacter)) {

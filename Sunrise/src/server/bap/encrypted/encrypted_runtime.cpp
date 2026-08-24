@@ -241,6 +241,20 @@ bool consume(Session& session,
                                      {line.data(), static_cast<std::size_t>(count)});
                 }
             }
+            if (outcome.requiresSelfResync) {
+                // Resend this peer's own account graph. Used by a change that alters replicated
+                // character state without a transaction - a reputation credit grants nothing, so
+                // no object would otherwise be re-encoded and the new value never reaches the
+                // client until something unrelated republishes the character.
+                // The deferred push refuses generation zero, and a peer that has never had a
+                // mutation published still carries it, so a peer at zero is moved to the lowest
+                // generation that means anything. One that already has a generation keeps it,
+                // because that is the account it is behind.
+                if (session.accountResyncGeneration == 0) {
+                    session.accountResyncGeneration = 1;
+                }
+                session.accountResyncArmed = true;
+            }
             if (transaction_if<EquipmentSwapTransaction>(outcome) != nullptr) {
                 std::array<char, core::log::kLineCapacity> line{};
                 const int count = std::snprintf(

@@ -18,6 +18,16 @@ struct Outcome {
     bool hasRecordClaim{};
     /** An opcode-504 pick moved the selection and its Family-4 object still has to follow. */
     bool hasSelectedCharacter{};
+    /**
+     * The request changed replicated character state without preparing a transaction.
+     *
+     * A vendor reputation turn-in credits a progression lane and grants nothing, so it produces no
+     * mutation and nothing would re-encode the Family-4 character object - the credit is correct in
+     * server state but the client never re-reads it. This asks for the peer's own account graph to
+     * be resent. `publish_account_mutation` deliberately skips the origin peer because it normally
+     * receives the change in its own reply; this is the case where it does not.
+     */
+    bool requiresSelfResync{};
     std::uint64_t selectedCharacterSoid{};
     /** A request prepares at most one State mutation; the alternative owns only that payload. */
     using Mutation = std::variant<std::monostate,
