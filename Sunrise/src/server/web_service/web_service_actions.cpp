@@ -835,13 +835,16 @@ void report_purchase(std::uint16_t opcode,
         }
         substituteIndex = replacement.definitionIndex;
         std::array<char, core::log::kLineCapacity> line{};
-        const int used = std::snprintf(
-            line.data(), line.size(),
-            "ev=vendor stage=substitute sold=0x%08X granted=0x%08X item=%u",
-            sold.definitionHash, replacement.definitionHash,
-            static_cast<unsigned>(replacement.definitionIndex));
+        const int used =
+            std::snprintf(line.data(),
+                          line.size(),
+                          "ev=vendor stage=substitute sold=0x%08X granted=0x%08X item=%u",
+                          sold.definitionHash,
+                          replacement.definitionHash,
+                          static_cast<unsigned>(replacement.definitionIndex));
         if (used > 0) {
-            core::log::write(core::log::Channel::server, core::log::Level::info,
+            core::log::write(core::log::Channel::server,
+                             core::log::Level::info,
                              {line.data(), static_cast<std::size_t>(used)});
         }
         return true;
@@ -953,16 +956,22 @@ void report_purchase(std::uint16_t opcode,
         rolledItemIndex = kUnavailableDefinitionIndex;
     }
     std::array<char, core::log::kLineCapacity> line{};
-    const int used = std::snprintf(line.data(), line.size(),
-                                   "ev=bounty_roll stage=pick vendor=%d hash=0x%08X category=%d "
-                                   "authored=%u resolved=%u held=%u pool=%u item=%d",
-                                   vendorIndex, entry.definitionHash, categoryIndex,
-                                   static_cast<unsigned>(poolCount), resolved, held, candidates,
-                                   rolledItemIndex == kUnavailableDefinitionIndex
-                                       ? -1
-                                       : static_cast<int>(rolledItemIndex));
+    const int used = std::snprintf(
+        line.data(),
+        line.size(),
+        "ev=bounty_roll stage=pick vendor=%d hash=0x%08X category=%d "
+        "authored=%u resolved=%u held=%u pool=%u item=%d",
+        vendorIndex,
+        entry.definitionHash,
+        categoryIndex,
+        static_cast<unsigned>(poolCount),
+        resolved,
+        held,
+        candidates,
+        rolledItemIndex == kUnavailableDefinitionIndex ? -1 : static_cast<int>(rolledItemIndex));
     if (used > 0) {
-        core::log::write(core::log::Channel::server, core::log::Level::info,
+        core::log::write(core::log::Channel::server,
+                         core::log::Level::info,
                          {line.data(), static_cast<std::size_t>(used)});
     }
     return true;
@@ -991,10 +1000,9 @@ void report_purchase(std::uint16_t opcode,
  * @param rowIndex Sale row the purchase names.
  * @return True when this row was an exchange and its own item must NOT be granted.
  */
-[[nodiscard]] bool
-exchange_vendor_row(std::int32_t vendorIndex,
-                    std::int32_t rowIndex,
-                    state::PendingProfileItemAcquisition& mutation) noexcept {
+[[nodiscard]] bool exchange_vendor_row(std::int32_t vendorIndex,
+                                       std::int32_t rowIndex,
+                                       state::PendingProfileItemAcquisition& mutation) noexcept {
     namespace vendor_domain = state::build_data::vendors;
     if (vendorIndex < 0 || rowIndex < 0) {
         return false;
@@ -1054,11 +1062,16 @@ exchange_vendor_row(std::int32_t vendorIndex,
     if (overflowed || payoutCount == 0) {
         std::array<char, core::log::kLineCapacity> refusal{};
         const int written = std::snprintf(
-            refusal.data(), refusal.size(),
+            refusal.data(),
+            refusal.size(),
             "ev=vendor_exchange stage=apply result=fail reason=%s vendor=%d hash=0x%08X row=%d "
             "payouts=%zu limit=%zu",
-            overflowed ? "payout_overflow" : "payout_missing", vendorIndex, entry.definitionHash,
-            rowIndex, payoutCount, kExchangePayoutCapacity);
+            overflowed ? "payout_overflow" : "payout_missing",
+            vendorIndex,
+            entry.definitionHash,
+            rowIndex,
+            payoutCount,
+            kExchangePayoutCapacity);
         if (written > 0) {
             core::log::write(core::log::Channel::server,
                              core::log::Level::warn,
@@ -1067,15 +1080,23 @@ exchange_vendor_row(std::int32_t vendorIndex,
         return true;
     }
     const bool applied = state::prepare_vendor_exchange(
-        costHash, costQuantity,
-        std::span<const state::ProfileExchangePayout>{payouts.data(), payoutCount}, mutation);
+        costHash,
+        costQuantity,
+        std::span<const state::ProfileExchangePayout>{payouts.data(), payoutCount},
+        mutation);
     std::array<char, core::log::kLineCapacity> line{};
     const int used = std::snprintf(
-        line.data(), line.size(),
+        line.data(),
+        line.size(),
         "ev=vendor_exchange stage=apply result=%s vendor=%d hash=0x%08X row=%d cost=0x%08X "
         "quantity=%d payouts=%zu",
-        applied ? "ok" : "fail", vendorIndex, entry.definitionHash, rowIndex, costHash,
-        costQuantity, payoutCount);
+        applied ? "ok" : "fail",
+        vendorIndex,
+        entry.definitionHash,
+        rowIndex,
+        costHash,
+        costQuantity,
+        payoutCount);
     if (used > 0) {
         core::log::write(core::log::Channel::server,
                          applied ? core::log::Level::info : core::log::Level::warn,
@@ -1216,6 +1237,15 @@ void report_reputation_refusal(const char* reason,
     }
     return false;
 }
+/** How one grant ended, so a caller can tell a settled row from a row still owed its item. */
+enum class GrantResult : std::uint8_t {
+    /** The item is prepared for the inventory; the row's offer is answered. */
+    granted,
+    /** The character already holds this pursuit, so the offer was answered some time ago. */
+    alreadyHeld,
+    /** Nothing was granted and nothing was held; the offer still stands. */
+    refused,
+};
 
 /**
  * Grants one item, given the collectible that owns it and its definition index.
@@ -1228,19 +1258,20 @@ void report_reputation_refusal(const char* reason,
  * @param collectibleIndex Collectible that owns the item.
  * @param itemDefinitionIndex Item to grant.
  * @param outcome Receives the prepared mutation on success.
+ * @return How the grant ended, which is what decides whether the row's offer was answered.
  */
-void grant_item_definition(const middleware::web_service::Message& message,
-                           std::uint16_t collectibleIndex,
-                           std::uint16_t itemDefinitionIndex,
-                           Outcome& outcome) noexcept {
+GrantResult grant_item_definition(const middleware::web_service::Message& message,
+                                  std::uint16_t collectibleIndex,
+                                  std::uint16_t itemDefinitionIndex,
+                                  Outcome& outcome) noexcept {
     state::build_data::items::Definition definition{};
     if (!state::build_data::find_item_definition_index(itemDefinitionIndex, definition)) {
         report_item_acquisition(
             message, "fail", "item_definition", collectibleIndex, itemDefinitionIndex, 0, 0);
-        return;
+        return GrantResult::refused;
     }
-    // The same rule the client's vendor-row gate applies, so a row that is still offered can never
-    // be one this grant would refuse.
+    // The same rule the client's native vendor-row gate applies locally, so a row that is still
+    // offered can never be one this grant would refuse.
     if (state::account::holds_pursuit(itemDefinitionIndex)) {
         report_item_acquisition(message,
                                 "fail",
@@ -1249,7 +1280,7 @@ void grant_item_definition(const middleware::web_service::Message& message,
                                 itemDefinitionIndex,
                                 definition.definitionHash,
                                 0);
-        return;
+        return GrantResult::alreadyHeld;
     }
 
     state::build_data::items::details::Definition detail{};
@@ -1266,7 +1297,7 @@ void grant_item_definition(const middleware::web_service::Message& message,
                                 itemDefinitionIndex,
                                 definition.definitionHash,
                                 0);
-        return;
+        return GrantResult::refused;
     }
 
     namespace bucket_domain = state::build_data::inventory::buckets;
@@ -1280,7 +1311,7 @@ void grant_item_definition(const middleware::web_service::Message& message,
                                     itemDefinitionIndex,
                                     definition.definitionHash,
                                     0);
-            return;
+            return GrantResult::refused;
         }
         state::PendingProfileItemAcquisition mutation{};
         if (!state::prepare_profile_item_acquisition(
@@ -1292,7 +1323,7 @@ void grant_item_definition(const middleware::web_service::Message& message,
                                     itemDefinitionIndex,
                                     definition.definitionHash,
                                     0);
-            return;
+            return GrantResult::refused;
         }
         outcome.mutation = mutation;
         report_item_acquisition(message,
@@ -1302,7 +1333,7 @@ void grant_item_definition(const middleware::web_service::Message& message,
                                 itemDefinitionIndex,
                                 definition.definitionHash,
                                 0);
-        return;
+        return GrantResult::granted;
     }
     if (bucket.arraySelector != bucket_domain::ArraySelector::character) {
         report_item_acquisition(message,
@@ -1312,7 +1343,7 @@ void grant_item_definition(const middleware::web_service::Message& message,
                                 itemDefinitionIndex,
                                 definition.definitionHash,
                                 0);
-        return;
+        return GrantResult::refused;
     }
 
     state::PendingItemAcquisition mutation{};
@@ -1324,7 +1355,7 @@ void grant_item_definition(const middleware::web_service::Message& message,
                                 itemDefinitionIndex,
                                 definition.definitionHash,
                                 0);
-        return;
+        return GrantResult::refused;
     }
     outcome.mutation = mutation;
     report_item_acquisition(message,
@@ -1334,6 +1365,7 @@ void grant_item_definition(const middleware::web_service::Message& message,
                             itemDefinitionIndex,
                             definition.definitionHash,
                             mutation.acquiredInstanceSoid);
+    return GrantResult::granted;
 }
 
 /** Decodes one opcode-1801 Triumphs claim and reports the record it names. */
@@ -1444,7 +1476,7 @@ void acquire_item(const middleware::web_service::Message& message, Outcome& outc
                                 0);
         return;
     }
-    grant_item_definition(message, collectibleIndex, itemDefinitionIndex, outcome);
+    (void)grant_item_definition(message, collectibleIndex, itemDefinitionIndex, outcome);
 }
 
 /**
@@ -1667,8 +1699,10 @@ enum class RowOutcome : std::uint8_t {
     reputation,
     /** The row charged one stack and credited others. */
     exchange,
-    /** The row granted the item it names, or the item it stands for. */
+    /** The row's offer is answered: its item was handed over, or was already held. */
     granted,
+    /** The row should have granted and could not, so its offer still stands. */
+    grantRefused,
 };
 
 /**
@@ -1701,14 +1735,14 @@ RowOutcome settle_vendor_row(const middleware::web_service::Message& message,
         report_purchase(opcode,
                         "ok",
                         rolledBounty == kUnavailableDefinitionIndex ? "bounty_pool_empty"
-                                                                   : "bounty_roll",
+                                                                    : "bounty_roll",
                         vendorIndex,
                         rowIndex,
                         itemDefinitionIndex);
         if (rolledBounty != kUnavailableDefinitionIndex) {
             std::uint16_t rolledCollectible = state::build_data::collectibles::kNoCollectibleIndex;
             (void)find_collectible_for_item(rolledBounty, rolledCollectible);
-            grant_item_definition(message, rolledCollectible, rolledBounty, outcome);
+            (void)grant_item_definition(message, rolledCollectible, rolledBounty, outcome);
         }
         return RowOutcome::bountyRoll;
     }
@@ -1744,8 +1778,12 @@ RowOutcome settle_vendor_row(const middleware::web_service::Message& message,
                     vendorIndex,
                     rowIndex,
                     granted);
-    grant_item_definition(message, collectibleIndex, granted, outcome);
-    return RowOutcome::granted;
+    // A grant that failed for a transient reason - the loadout would not resolve, the bucket was
+    // full - leaves the row's offer standing, and the caller must not treat it as answered.
+    return grant_item_definition(message, collectibleIndex, granted, outcome)
+                   == GrantResult::refused
+               ? RowOutcome::grantRefused
+               : RowOutcome::granted;
 }
 
 /**
@@ -1813,9 +1851,10 @@ void acquire_quest(const middleware::web_service::Message& message, Outcome& out
                                                  questCategoryIndex,
                                                  itemDefinitionIndex,
                                                  outcome);
-    // Only a row that handed over the quest it offered answers the banner. A bounty roll, a
-    // reputation credit and an exchange all leave the banner's own question unanswered, so it
-    // stays up.
+    // Only a row whose offer is answered retires the banner: handed over, or already held from an
+    // earlier answer. A bounty roll and an exchange leave the banner's own question unanswered, and
+    // a grant that failed for a transient reason still owes the player its quest - retiring the
+    // banner then would bury the offer until relaunch.
     if (settled != RowOutcome::granted) {
         return;
     }
