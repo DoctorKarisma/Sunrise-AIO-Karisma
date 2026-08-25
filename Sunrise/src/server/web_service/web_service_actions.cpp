@@ -1012,6 +1012,7 @@ exchange_vendor_row(std::int32_t vendorIndex,
     std::array<state::ProfileExchangePayout, kExchangePayoutCapacity> payouts{};
     std::size_t payoutCount = 0;
     bool matched = false;
+    bool overflowed = false;
     core::rule_text::Cursor rules{text.data()};
     while (!matched && rules.seek_field()) {
         const std::uint32_t ruleVendor = rules.read_hex();
@@ -1033,18 +1034,37 @@ exchange_vendor_row(std::int32_t vendorIndex,
                 ruleOverflowed = true;
             }
         }
-        // A rule naming more payouts than can be credited is refused rather than paid in part,
-        // because paying some of what it promised is worse than saying it was never honoured.
-        matched = !ruleOverflowed && ruleVendor == entry.definitionHash && ruleRow == rowIndex;
+        matched = ruleVendor == entry.definitionHash && ruleRow == rowIndex;
         if (matched) {
+            overflowed = ruleOverflowed;
             costHash = ruleCost;
             costQuantity = ruleCostQuantity;
             payouts = rulePayouts;
             payoutCount = rulePayoutCount;
         }
     }
-    if (!matched || payoutCount == 0) {
+    if (!matched) {
         return false;
+    }
+    // A matched rule owns the row whatever else it got wrong, because the rule proves the row's
+    // own item is a placeholder and falling through would grant it. A rule naming more payouts
+    // than the change ring can announce, or none at all, is refused whole rather than paid in
+    // part - and the refusal is logged, because a rule that silently does nothing reads exactly
+    // like a rule that was never written.
+    if (overflowed || payoutCount == 0) {
+        std::array<char, core::log::kLineCapacity> refusal{};
+        const int written = std::snprintf(
+            refusal.data(), refusal.size(),
+            "ev=vendor_exchange stage=apply result=fail reason=%s vendor=%d hash=0x%08X row=%d "
+            "payouts=%zu limit=%zu",
+            overflowed ? "payout_overflow" : "payout_missing", vendorIndex, entry.definitionHash,
+            rowIndex, payoutCount, kExchangePayoutCapacity);
+        if (written > 0) {
+            core::log::write(core::log::Channel::server,
+                             core::log::Level::warn,
+                             {refusal.data(), static_cast<std::size_t>(written)});
+        }
+        return true;
     }
     const bool applied = state::prepare_vendor_exchange(
         costHash, costQuantity,
