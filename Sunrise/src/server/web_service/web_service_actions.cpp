@@ -1742,9 +1742,19 @@ void acquire_quest(const middleware::web_service::Message& message, Outcome& out
         return;
     }
     // The 16-bit slot field is where the click landed, and indexing sale rows with it granted
-    // armour mods. The 32-bit field is the real row, and the slot is kept only for the case where
-    // the body carried no such field.
-    const std::int32_t row = request.hasSaleIndex ? request.saleIndex : request.slotIndex;
+    // armour mods. The 32-bit field is the real row; a body without one has never been captured,
+    // and guessing the slot in as a sale row would reproduce that exact wrong grant - so it is
+    // refused, and the refusal names the shape so a real capture can settle it.
+    if (!request.hasSaleIndex) {
+        report_purchase(quest::kOpcode,
+                        "fail",
+                        "sale_field_missing",
+                        request.vendorIndex,
+                        request.slotIndex,
+                        kUnavailableDefinitionIndex);
+        return;
+    }
+    const std::int32_t row = request.saleIndex;
     std::uint16_t itemDefinitionIndex = 0;
     const char* reason = "unknown";
     // A row of -1 is the client saying this tile is not a sale row at all, rather than a row that
