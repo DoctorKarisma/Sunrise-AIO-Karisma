@@ -21,10 +21,10 @@ namespace sunrise::state::account {
  * flag let every quest through - three copies of one bounty in the tab. Every classification is
  * logged as `ev=pursuit stage=classify` so this stays settled by data rather than by assumption.
  *
- * This lives here rather than beside either caller because two of them apply it and they must not
- * drift: the Web Service refuses a duplicate grant with it, and the client's vendor-row gate hides
- * the row with it. A row still offered for an item the grant would refuse is the bug it exists to
- * prevent.
+ * This lives in State rather than beside its caller because the rule is not the Web Service's own:
+ * it mirrors the classification the client's native vendor-row gate applies locally when it decides
+ * whether a row is still offered, and the two must not drift. A row still offered for an item the
+ * grant would refuse is the bug it exists to prevent.
  *
  * @param itemDefinitionIndex Item to classify.
  * @return True when this is a pursuit the selected character already holds.
