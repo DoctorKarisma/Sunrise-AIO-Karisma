@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <array>
-#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <limits>
@@ -86,71 +85,6 @@ void report_request(const middleware::web_service::Message& message) noexcept {
     if (length != 0) {
         core::log::write(core::log::Channel::server, core::log::Level::info, {line.data(), length});
     }
-}
-
-/** One refusal line carries both request indices, the clock presence, and the clock verdict. */
-constexpr std::size_t kPurchaseLineCapacity = 128;
-/**
- * Status code answered to a purchase request.
- * Any non-zero value refuses. Zero is the success code, so it must not be used here.
- */
-constexpr std::int32_t kPurchaseRefusedCode = 1;
-
-/**
- * Reads the server's own clock for the purchase clock rule.
- * The system clock counts from the Unix epoch, which is the same base the request field uses.
- * @return Current time in Unix seconds.
- */
-[[nodiscard]] std::int64_t server_clock_seconds() noexcept {
-    const auto sinceEpoch = std::chrono::system_clock::now().time_since_epoch();
-    return std::chrono::duration_cast<std::chrono::seconds>(sinceEpoch).count();
-}
-
-/**
- * Refuses one vendor purchase and answers it.
- * No award, cost or stock rule exists yet, so no purchase can succeed. The refusal must still be
- * answered, because no answer holds the head of the client's pending queue.
- * @param message Parsed purchase request.
- * @param response Response-body storage owned by the caller.
- * @param written Receives the encoded response size.
- * @return True when the refusal was encoded.
- */
-[[nodiscard]] bool refuse_purchase(const middleware::web_service::Message& message,
-                                   std::span<std::byte> response,
-                                   std::size_t& written) noexcept {
-    namespace purchase_codec = middleware::web_service::messages::opcode901;
-    purchase_codec::Request purchase;
-    const bool parsed = purchase_codec::parse_request(message, purchase);
-    // The clock verdict is logged, never acted on. Nothing can pass while the route refuses.
-    const auto policy = purchase_codec::check_clock(purchase, server_clock_seconds());
-    std::array<char, kPurchaseLineCapacity> line{};
-    const int length =
-        parsed ? std::snprintf(
-                     line.data(),
-                     line.size(),
-                     "ev=ws901 stage=purchase result=refuse vendor=%d sale=%d present=%u policy=%s",
-                     static_cast<int>(purchase.vendorIndex),
-                     static_cast<int>(purchase.saleIndex),
-                     purchase.hasClock ? 1U : 0U,
-                     purchase_codec::clock_policy_name(policy))
-               : std::snprintf(line.data(),
-                               line.size(),
-                               "ev=ws901 stage=purchase result=refuse reason=parse");
-    if (length > 0) {
-        core::log::write(core::log::Channel::server,
-                         core::log::Level::error,
-                         {line.data(), static_cast<std::size_t>(length)});
-    }
-    middleware::web_service::StatusResponse status{};
-    status.code = kPurchaseRefusedCode;
-    // The trailing bool drives a local action effect on the client, so it stays clear.
-    status.trailingBool = false;
-    return middleware::web_service::encode_response(
-        message,
-        middleware::web_service::ResponseShape::statusPairWithBool,
-        status,
-        response,
-        written);
 }
 
 /**
@@ -291,8 +225,8 @@ bool consume(std::span<const std::byte> request,
                || encode_echo(message, response, written);
     }
 
-    // Vendor purchases fall through to the shared response-shape path now, which runs the action
-    // and answers the success status. `refuse_purchase` stays for the cases the action declines.
+    // Vendor purchases fall through to the shared response-shape path, which runs the action and
+    // answers its status: an action that prepared no mutation is answered with the refused code.
 
     if (message.opcode == middleware::web_service::messages::opcode601::kOpcode) {
         return middleware::web_service::messages::opcode601::encode_response(
