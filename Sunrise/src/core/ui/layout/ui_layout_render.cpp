@@ -34,17 +34,23 @@ constexpr float kNavigationWidth = 180.0F;
 constexpr float kAutomaticWidth = 0.0F;
 /** A half-axis pivot centers the window on both viewport axes. */
 constexpr ImVec2 kCenterPivot{0.5F, 0.5F};
-/** Bottom-right area reserved for Dear ImGui's resize grip. */
-constexpr float kResizeGripExtent = 20.0F;
+
+/** Width of the custom right-edge resize zone. */
+constexpr float kResizeEdgeExtent = 12.0F;
+/** Height of the custom bottom-edge resize zone. */
+constexpr float kResizeBottomExtent = 12.0F;
+/** Size of the visible bottom-right resize grip. */
+constexpr float kResizeGripVisualExtent = 14.0F;
 
 /**
- * The main surface is draggable and resizable but does not use Dear ImGui's saved settings.
+ * Dear ImGui's built-in resize behavior is disabled.
  *
- * The normal fitted menu size is the minimum. Users may enlarge the menu by dragging the
- * bottom-right resize grip.
+ * Sunrise handles resizing itself so only the right edge, bottom edge and bottom-right corner
+ * can resize the window. The top and left edges remain ordinary drag areas.
  */
 constexpr ImGuiWindowFlags kMainWindowFlags =
-    ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoTitleBar;
+    ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings
+    | ImGuiWindowFlags_NoTitleBar;
 
 /** One trailing null byte turns a descriptor name into a component label. */
 constexpr std::size_t kLabelTerminatorBytes = 1;
@@ -67,23 +73,18 @@ constexpr float kHalfExtent = 2.0F;
 /** The surface names the tool with the same wordmark the HUD card carries. */
 constexpr char kTitle[] = "SUNRISE";
 
-/**
- * Session-only menu position.
- *
- * This intentionally lives only in memory. It is not written to an ImGui settings file, so the
- * menu starts centered again on a fresh game launch.
- */
+/** Session-only menu position. */
 ImVec2 g_menuPosition{};
 bool g_menuPositionInitialized = false;
 
-/**
- * Session-only menu size.
- *
- * The first opening starts at the normal authored/fitted size. A user resize is remembered while
- * Sunrise remains loaded, but no size is written to disk.
- */
+/** Session-only menu size. */
 ImVec2 g_menuSize{};
 bool g_menuSizeInitialized = false;
+
+/** True while the right edge is actively being dragged. */
+bool g_resizingRight = false;
+/** True while the bottom edge is actively being dragged. */
+bool g_resizingBottom = false;
 
 /**
  * Copies one display name into null-terminated component storage.
@@ -102,9 +103,6 @@ component_label(const modules::Descriptor& descriptor) noexcept {
  *
  * On a large enough viewport this is the authored 920x580 size. On smaller viewports the same
  * existing fallback is retained so Sunrise never demands a window larger than the game surface.
- *
- * @param viewport Active Dear ImGui viewport.
- * @return Main window size, or zero axes when the viewport is not ready.
  */
 [[nodiscard]] ImVec2 window_size(const ImGuiViewport& viewport) noexcept {
     if (viewport.Size.x <= 0.0F || viewport.Size.y <= 0.0F) {
@@ -125,17 +123,37 @@ component_label(const modules::Descriptor& descriptor) noexcept {
             (std::min)(scaling::dpi::pixels(kPreferredWindowHeight), availableHeight)};
 }
 
-/**
- * Returns the largest menu size that still leaves the authored margin around the viewport.
- *
- * @param viewport Active Dear ImGui viewport.
- * @return Maximum resizable dimensions.
- */
+/** Returns the largest menu size that still leaves the authored viewport margin. */
 [[nodiscard]] ImVec2 maximum_window_size(const ImGuiViewport& viewport) noexcept {
     const float margin = scaling::dpi::pixels(kViewportMargin);
 
     return {(std::max)(viewport.Size.x - (margin * kViewportMarginCount), 0.0F),
             (std::max)(viewport.Size.y - (margin * kViewportMarginCount), 0.0F)};
+}
+
+/** Draws the visible bottom-right resize grip using the active ImGui theme color. */
+void draw_resize_grip() noexcept {
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+
+    if (drawList == nullptr) {
+        return;
+    }
+
+    const ImVec2 windowPosition = ImGui::GetWindowPos();
+    const ImVec2 windowSize = ImGui::GetWindowSize();
+    const float extent = scaling::dpi::pixels(kResizeGripVisualExtent);
+
+    const ImVec2 bottomRight{
+        windowPosition.x + windowSize.x,
+        windowPosition.y + windowSize.y,
+    };
+
+    const ImU32 color = ImGui::GetColorU32(ImGuiCol_ResizeGrip);
+
+    drawList->AddTriangleFilled(bottomRight,
+                                ImVec2(bottomRight.x - extent, bottomRight.y),
+                                ImVec2(bottomRight.x, bottomRight.y - extent),
+                                color);
 }
 
 /**
@@ -167,13 +185,11 @@ void draw_title() noexcept {
         ImGui::SameLine();
     }
 
-    // The size is the authored one, because the style carries the display scale separately.
     ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * kTitleTextRatio);
 
     const float titleHeight = ImGui::GetTextLineHeight();
     const float rowY = ImGui::GetCursorPosY();
 
-    // The title is shorter than the logo, so it sits lower to stay level with it.
     const float titleY =
         logoDrawn ? rowY + ((std::max)(extent - titleHeight, 0.0F) / kHalfExtent) : rowY;
 
@@ -184,8 +200,6 @@ void draw_title() noexcept {
 
     ImGui::SameLine();
 
-    // SameLine returns to the row the logo opened, so the version is placed against the title
-    // again, centered on it because it stays at body size.
     ImGui::SetCursorPosY(
         titleY + ((std::max)(titleHeight - ImGui::GetTextLineHeight(), 0.0F) / kHalfExtent));
 
@@ -194,7 +208,7 @@ void draw_title() noexcept {
 
 } // namespace
 
-/** Draws the Sunrise surface with session-only draggable positioning and resizing. */
+/** Draws the Sunrise surface with session-only draggable positioning and custom resizing. */
 bool render(bool visible) noexcept {
     if (!internal::context_is_current()) {
         return false;
@@ -218,7 +232,6 @@ bool render(bool visible) noexcept {
         return false;
     }
 
-    // A new lane starts closed, so the surface animates open the first time it is asked for.
     const float progress = animation::transition::update(kSurfaceAnimationId,
                                                          animation::transition::Lane::visibility,
                                                          visible,
@@ -231,29 +244,14 @@ bool render(bool visible) noexcept {
 
     const float scale = kOpeningScale + ((kOpenScale - kOpeningScale) * progress);
 
-    /*
-     * The first opening starts at the normal menu size. After the user resizes the menu, that
-     * larger size remains in memory for later closes/reopens during the same game session.
-     */
     if (!g_menuSizeInitialized) {
         g_menuSize = minimumSize;
         g_menuSizeInitialized = true;
     }
 
-    /*
-     * A viewport or resolution change can make a previously enlarged menu too large. Clamp the
-     * remembered size back into the currently valid range while never allowing it below the
-     * normal fitted menu dimensions.
-     */
     g_menuSize.x = (std::clamp)(g_menuSize.x, minimumSize.x, maximumSize.x);
     g_menuSize.y = (std::clamp)(g_menuSize.y, minimumSize.y, maximumSize.y);
 
-    /*
-     * First opening of the current session:
-     * center the menu.
-     *
-     * After that, g_menuPosition is retained and used when the menu is reopened.
-     */
     if (!g_menuPositionInitialized) {
         const ImVec2 scaledSize{g_menuSize.x * scale, g_menuSize.y * scale};
 
@@ -268,59 +266,78 @@ bool render(bool visible) noexcept {
     ImGui::SetNextWindowPos(g_menuPosition, ImGuiCond_Always);
 
     /*
-     * While opening, retain the existing slight size-growth animation. Once fully open, stop
-     * forcing the window dimensions so Dear ImGui's normal resize grip can control the size.
+     * Dear ImGui resizing is disabled, so Sunrise always owns the window size.
+     * The opening animation still applies the existing 0.96 -> 1.00 scale.
      */
-    if (progress < kOpenScale) {
-        ImGui::SetNextWindowSize({g_menuSize.x * scale, g_menuSize.y * scale}, ImGuiCond_Always);
+    ImGui::SetNextWindowSize({g_menuSize.x * scale, g_menuSize.y * scale}, ImGuiCond_Always);
 
-        ImGui::SetNextWindowSizeConstraints({minimumSize.x * scale, minimumSize.y * scale},
-                                            maximumSize);
-    } else {
-        ImGui::SetNextWindowSizeConstraints(minimumSize, maximumSize);
-        ImGui::SetNextWindowSize(g_menuSize, ImGuiCond_FirstUseEver);
-    }
-
-    // One style alpha fades the surface and everything drawn inside it together.
     ImGui::PushStyleVar(ImGuiStyleVar_Alpha, progress);
 
     const bool submitContents = ImGui::Begin("Sunrise", nullptr, kMainWindowFlags);
 
-    /*
-     * Keep the existing whole-window drag behavior, except inside the bottom-right resize area.
-     *
-     * This allows the menu to remain draggable the same way it was before while preventing the
-     * custom movement code from fighting Dear ImGui when the resize grip is being dragged.
-     */
+    draw_resize_grip();
+
     const ImVec2 windowPosition = ImGui::GetWindowPos();
     const ImVec2 windowSize = ImGui::GetWindowSize();
     const ImVec2 mousePosition = ImGui::GetMousePos();
+    const ImVec2 mouseDelta = ImGui::GetIO().MouseDelta;
 
-    const float resizeGripExtent = scaling::dpi::pixels(kResizeGripExtent);
+    const float rightExtent = scaling::dpi::pixels(kResizeEdgeExtent);
+    const float bottomExtent = scaling::dpi::pixels(kResizeBottomExtent);
 
-    const bool mouseInResizeGrip =
-        mousePosition.x >= windowPosition.x + windowSize.x - resizeGripExtent
-        && mousePosition.y >= windowPosition.y + windowSize.y - resizeGripExtent;
+    const float rightEdge = windowPosition.x + windowSize.x;
+    const float bottomEdge = windowPosition.y + windowSize.y;
 
-    const bool resizing = mouseInResizeGrip && ImGui::IsMouseDragging(ImGuiMouseButton_Left);
+    const bool mouseNearRight =
+        mousePosition.x >= rightEdge - rightExtent && mousePosition.x <= rightEdge + rightExtent
+        && mousePosition.y >= windowPosition.y && mousePosition.y <= bottomEdge;
 
-    if (!resizing && ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem)
-        && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
-        const ImVec2 mouseDelta = ImGui::GetIO().MouseDelta;
+    const bool mouseNearBottom =
+        mousePosition.y >= bottomEdge - bottomExtent && mousePosition.y <= bottomEdge + bottomExtent
+        && mousePosition.x >= windowPosition.x && mousePosition.x <= rightEdge;
 
-        g_menuPosition.x += mouseDelta.x;
-        g_menuPosition.y += mouseDelta.y;
+    const bool leftDown = ImGui::IsMouseDown(ImGuiMouseButton_Left);
+    const bool leftClicked = ImGui::IsMouseClicked(ImGuiMouseButton_Left);
+
+    /*
+     * A resize operation begins only from the right edge, bottom edge, or bottom-right corner.
+     * Top and left edges therefore remain ordinary menu drag areas.
+     */
+    if (leftClicked) {
+        g_resizingRight = mouseNearRight;
+        g_resizingBottom = mouseNearBottom;
+    }
+
+    if (!leftDown) {
+        g_resizingRight = false;
+        g_resizingBottom = false;
+    }
+
+    const bool resizing = g_resizingRight || g_resizingBottom;
+
+    /*
+     * Resize width from the right edge only. The window's left edge never moves.
+     */
+    if (g_resizingRight && leftDown && progress >= kOpenScale) {
+        g_menuSize.x = (std::clamp)(g_menuSize.x + mouseDelta.x, minimumSize.x, maximumSize.x);
     }
 
     /*
-     * Once fully open, remember any dimensions chosen using the resize grip.
-     * Opening-animation dimensions are deliberately not recorded.
+     * Resize height from the bottom edge only. The window's top edge never moves.
      */
-    if (progress >= kOpenScale) {
-        const ImVec2 currentSize = ImGui::GetWindowSize();
+    if (g_resizingBottom && leftDown && progress >= kOpenScale) {
+        g_menuSize.y = (std::clamp)(g_menuSize.y + mouseDelta.y, minimumSize.y, maximumSize.y);
+    }
 
-        g_menuSize.x = (std::clamp)(currentSize.x, minimumSize.x, maximumSize.x);
-        g_menuSize.y = (std::clamp)(currentSize.y, minimumSize.y, maximumSize.y);
+    /*
+     * Preserve the existing whole-window drag behavior whenever the user is not resizing.
+     *
+     * This includes the top and left edges by design.
+     */
+    if (!resizing && ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem)
+        && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+        g_menuPosition.x += mouseDelta.x;
+        g_menuPosition.y += mouseDelta.y;
     }
 
     if (submitContents) {
