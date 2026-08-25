@@ -1,0 +1,22 @@
+# Vendor definition hashes to publish definitions for, in priority order.
+# A definition is over 100 KiB, so only a window of them fits; the window used to be the head of
+# the index, which assumed the Tower's vendors sit low in it. They do not - the Drifter is row 195
+# - so the ones that matter are named here by hash, which is stable where a row position is not.
+0ED2CB2F  # The Drifter
+280FB4FD  # Banshee-44
+04243655  # Commander Zavala
+D6C4CCA1  # Lord Shaxx
+ADE600F9  # Ada-1, for when she is reachable
+2D9E6DC1  # Saint-14
+36D32C3C  # Eva Levante
+EE0F473E  # Prismatic Recaster
+6B147C2D  # Yuna, IGR_VENDOR - Mugunghwa Merchant, 115 rows, 112 gated on "IGR Benefactor"
+17A817DE  # Devrim Kay, PLANET_EDZ
+3F59FB01  # Sloane, PLANET_TITAN
+5DF413A9  # Failsafe, PLANET_NESSUS
+ED6345FD  # Asher Mir, PLANET_IO
+8EF4CCBA  # Brother Vance, PLANET_MERCURY
+6770811D  # Ana Bray, PLANET_MARS
+6053823D  # Eris Morn, ERIS_MORN
+337EAF04  # Spider, TANGLED_SHORE_SPIDER
+6DC6627C  # Petra Venj, DREAMING_CITY_PETRA_VENJ

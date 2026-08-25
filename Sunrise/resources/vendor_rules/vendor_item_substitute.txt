@@ -1,0 +1,16 @@
+# soldHash  grantHash   - both hex, keyed by the item a sale row names.
+#
+# A row whose item is DestinyItemType 20 (Dummy) is a UI placeholder: buying it is meant to hand
+# over something the row does not name. Granting the placeholder itself puts an item in the
+# player's inventory the client will not draw.
+#
+# Amanda Holliday's Legacy Content rows each stand for a campaign's first quest step.
+#
+# These rows do not settle after purchase, and that is a client-side gate rather than a gap here:
+# each is offered only while its own value slot reads zero (Red War VAL(12578), Curse of Osiris
+# VAL(12609), Warmind VAL(12624)), and those slots are kind-0 - no account object backs them, so
+# no bank write reaches the evaluator. Only the family-5 override list does, and family 5 is
+# answered once per launch.
+BEB63647 37DD26F0  # Legacy: The Red War        -> Homecoming
+6CBEA754 6706D3EC  # Legacy: Curse of Osiris    -> The Gateway
+65683247 F5B78E7F  # Legacy: Warmind            -> Ice and Shadow

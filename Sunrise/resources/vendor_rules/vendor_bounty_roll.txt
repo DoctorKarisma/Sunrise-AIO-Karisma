@@ -1,0 +1,61 @@
+# vendorDefinitionHash  triggerCategory  repeatableItemHash...
+#
+# The row whose click grants a repeatable bounty, and the pool it may draw from. The vendor hash and
+# the item hashes are hex; the trigger category is decimal. A key may span several lines - they
+# accumulate - so a long pool stays readable.
+#
+# The trigger row is the vendor's "Additional Bounties", which costs 3000 glimmer where an ordinary
+# daily costs 250. It sells a Dummy placeholder, because what it hands out is NOT one of the
+# vendor's sale rows: repeatable bounties appear in no vendor's sale list anywhere in the manifest.
+# They exist only as item definitions, so they have to be named by hash. That is why this pool is
+# authored rather than discovered, and why rolling from the vendor's own rows could never be right.
+#
+# A character may hold five of a vendor's repeatables at once; the roll refuses past that.
+
+# Banshee-44 - 17 repeatable bounties (bounties.gunsmith.repeatable)
+280FB4FD 5 5D141638 883888D2 872EA8A1 01DC598F 07C714F3 AA5E726B
+280FB4FD 5 F3746DA5 127BA906 CCFA8EED BFECC497 32887AB0 83F12C63
+280FB4FD 5 DDD3FA2C 8ACFB0ED 2A687BEF 6932ADCD 1454BEAA
+
+# Commander Zavala - 19 repeatable bounties (bounties.strikes.repeatable)
+04243655 0 4A29BCDA 42578428 6C0B30AF 1DE83B38 7136176E BF4F2EB8
+04243655 0 776E4F0F 331E70E8 D4355ED6 763A6B0E 4AFC6C33 AD0B6203
+04243655 0 3F10251B 94D5C797 B5211F5D 5528D807 DE637D93 ECBD6C23
+04243655 0 A0A316E4
+
+# Eva Levante, Solstice - 10 repeatable bounties (events.solstice.bounties.repeatable)
+36D32C3C 20 E28EF438 E28EF43D E28EF43F E28EF439 E28EF43C E28EF43B
+36D32C3C 20 E28EF433 E28EF432 E28EF43E E28EF43A
+
+# Eva Levante, Festival of the Lost - 9 repeatable bounties (events.fotl.bounties.repeatable)
+36D32C3C 27 FC107EB8 FC107EBC FC107EBE FC107EB9 FC107EBF FC107EBB
+36D32C3C 27 FC107EBD FC107EBA FC107EB2
+
+# Eva Levante, the Dawning - 22 repeatable bounties (events.dawning.bounties.repeatable)
+36D32C3C 30 5894443C 95DE552D 59174661 2A6CE6A3 B98A680F D721DDD6
+36D32C3C 30 055EE67C 83D99283 2EA24BB0 B8221B31 904BFF45 31A9A638
+36D32C3C 30 2F0A2D8C D261B6E4 732B179B D0D15AE8 C4465457 2B7F9270
+36D32C3C 30 52B73743 58E0BC90 7E752198 D15D4925
+
+# Eva Levante, the Revelry - 9 repeatable bounties (events.spring.bounties.repeatable)
+36D32C3C 41 66B44990 C7BF4216 19945903 DA145597 DB13A891 42798A54
+36D32C3C 41 53793490 A2D17516 F4A68C03
+
+# Lord Shaxx - 15 repeatable bounties (bounties.crucible.repeatable)
+D6C4CCA1 4 A73D657C 00CC9E16 D15E5F76 A126163D 720AC276 D17E2078
+D6C4CCA1 4 A7DBB1F8 29469C1D 341AA115 BAD0CF69 EDDEA6C3 C56B6E01
+D6C4CCA1 4 C81C234A DB8AE8D2 175AAE0F
+
+# Prismatic Recaster - 16 repeatable bounties (v490.bounties.limited.ritual.jerboa.repeatable)
+EE0F473E 1 666880DF 666880DD 9A8D481D 9A8D481F 666880DE 666880DC
+EE0F473E 1 9A8D481C 666880DB 9A8D4812 9A8D4813 666880DA 9A8D481A
+EE0F473E 1 9A8D4818 9A8D481B 9A8D481E 9A8D4819
+
+# Saint-14 - 10 repeatable bounties (trials.bounties.repeatable)
+2D9E6DC1 9 FC778E25 35D929EC D8C2F3E5 AF40F3A2 1CE52836 69C3ECF6
+2D9E6DC1 9 69F44F55 0C94A580 F1F06DF7 92BF37EB
+
+# The Drifter - 15 repeatable bounties (bounties.gambit.repeatable)
+0ED2CB2F 0 08B80A43 BB43FD5B 9F735B92 9E2A6995 7B51B3E4 56A313A2
+0ED2CB2F 0 BC1AE1FB BE3E039D 7F25B0AB 90C0F8EA DC5F50C6 DC50FE3E
+0ED2CB2F 0 F540D54C BD6ED67A 4E6181E7
