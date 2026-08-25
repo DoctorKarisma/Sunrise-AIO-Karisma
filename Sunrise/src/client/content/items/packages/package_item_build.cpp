@@ -86,8 +86,10 @@ void build_vendor_catalog(const reader::Source& source, reader::Scratch& scratch
     if (!vendor_domain::snapshot_index(index, count) || count == 0) {
         return;
     }
-    // Which vendors get their definitions read, because each is over 100 KiB and asking for all
-    // 511 overruns the sale-row bank and publishes nothing but the index.
+    // Which vendors get their definitions read, because each is over 100 KiB and the definition
+    // and sale-row banks hold nowhere near all 511. A definition that no longer fits is skipped
+    // by the pass, and the walk is in index order - so past the banks' capacity it is the
+    // highest-index vendors that drop, whichever list put them there.
     //
     // The leading window is the fallback, not the rule: it assumed the Tower's vendors sit low in
     // the index, and they do not - the Drifter is row 195, so every request against him failed to
@@ -107,11 +109,27 @@ void build_vendor_catalog(const reader::Source& source, reader::Scratch& scratch
             // vendor, and quietly cost whichever vendor no longer fits.
             continue;
         }
-        for (std::size_t row = 0; row < count; ++row) {
-            if (index[row].definitionHash == named[at]) {
-                hashes[wanted++] = named[at];
-                break;
-            }
+        bool installed = false;
+        for (std::size_t row = 0; row < count && !installed; ++row) {
+            installed = index[row].definitionHash == named[at];
+        }
+        if (installed) {
+            hashes[wanted++] = named[at];
+            continue;
+        }
+        // A named hash the index does not carry is a mistyped rule, and dropping it silently
+        // reads exactly like the vendor resolving - until a request against it fails with no
+        // line to say the catalog never held it.
+        std::array<char, core::log::kLineCapacity> missing{};
+        const int written = std::snprintf(missing.data(),
+                                          missing.size(),
+                                          "ev=vendor stage=catalog result=skip reason=unknown_hash "
+                                          "hash=0x%08X",
+                                          named[at]);
+        if (written > 0) {
+            core::log::write(core::log::Channel::state,
+                             core::log::Level::warn,
+                             {missing.data(), static_cast<std::size_t>(written)});
         }
     }
     // Fill any remaining room from the head of the index, skipping what is already named, so a
@@ -126,9 +144,10 @@ void build_vendor_catalog(const reader::Source& source, reader::Scratch& scratch
         }
     }
     // The first pass published an index with no definitions behind it, so it has to be dropped
-    // before the second pass will run at all. That makes the second pass the one that decides
-    // whether there is a catalog at all, so a failure here is reported rather than discarded: it
-    // leaves every vendor unresolvable, and nothing downstream can say why.
+    // before the second pass will run at all. The second pass skips a definition it cannot read
+    // or fit rather than failing whole, so what it publishes is every requested vendor that fits
+    // - but a pass that fails outright still leaves every vendor unresolvable, so its outcome is
+    // reported rather than discarded.
     vendor_domain::clear();
     const bool published =
         content::vendors::build(source, scratch, std::span(hashes).first(wanted));

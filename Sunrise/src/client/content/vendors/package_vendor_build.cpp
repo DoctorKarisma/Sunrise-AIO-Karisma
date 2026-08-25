@@ -275,22 +275,25 @@ read_index(const reader::Source& source, reader::Scratch& scratch, Storage& stor
 /**
  * Reports the pass so a boot with no vendor catalog says which step lost the rows.
  * @param storage Pass storage holding every count.
+ * @param skipped Requested definitions that could not be read or could not fit.
  * @param result Outcome text for the log line.
  */
-void report(const Storage& storage, const char* result) noexcept {
+void report(const Storage& storage, std::size_t skipped, const char* result) noexcept {
     std::array<char, core::log::kLineCapacity> line{};
     const int written = std::snprintf(line.data(),
                                       line.size(),
                                       "ev=build_data stage=vendors index=%zu definitions=%zu "
-                                      "sale=%zu installed=%zu result=%s",
+                                      "sale=%zu installed=%zu skipped=%zu result=%s",
                                       storage.indexCount,
                                       storage.definitionCount,
                                       storage.saleRowCount,
                                       storage.installedRowCount,
+                                      skipped,
                                       result);
     if (written > 0) {
         core::log::write(core::log::Channel::state,
-                         storage.indexCount != 0 ? core::log::Level::info : core::log::Level::warn,
+                         storage.indexCount != 0 && skipped == 0 ? core::log::Level::info
+                                                                 : core::log::Level::warn,
                          {line.data(), static_cast<std::size_t>(written)});
     }
 }
@@ -307,16 +310,38 @@ bool build(const reader::Source& source,
     static Storage storage{};
     storage = {};
     if (!read_index(source, scratch, storage)) {
-        report(storage, "index");
+        report(storage, 0, "index");
         return false;
     }
     // Walking the index in order gives the ascending definition order the catalog requires.
+    //
+    // A definition that cannot be read - or cannot fit the definition or row banks - costs that
+    // vendor alone, not the pass. Failing whole here is what a full bank used to do, and it was
+    // the worst failure this domain had: the empty catalog was cached, every later boot restored
+    // it, and every vendor stayed unresolvable with one boot-time line to say why.
+    std::size_t skipped = 0;
     for (std::size_t row = 0; row < storage.indexCount; ++row) {
         const domain::IndexEntry entry = storage.index[row];
-        if (requested(definitionHashes, entry.definitionHash)
-            && !read_definition(source, scratch, entry, storage)) {
-            report(storage, "definition");
-            return false;
+        if (!requested(definitionHashes, entry.definitionHash)) {
+            continue;
+        }
+        if (read_definition(source, scratch, entry, storage)) {
+            continue;
+        }
+        ++skipped;
+        std::array<char, core::log::kLineCapacity> line{};
+        const int written = std::snprintf(line.data(),
+                                          line.size(),
+                                          "ev=build_data stage=vendors result=skip hash=0x%08X "
+                                          "row=%zu definitions=%zu sale=%zu",
+                                          entry.definitionHash,
+                                          row,
+                                          storage.definitionCount,
+                                          storage.saleRowCount);
+        if (written > 0) {
+            core::log::write(core::log::Channel::state,
+                             core::log::Level::warn,
+                             {line.data(), static_cast<std::size_t>(written)});
         }
     }
     const bool published = state::build_data::publish_vendor_catalog(
@@ -324,7 +349,7 @@ bool build(const reader::Source& source,
         std::span(storage.definitions).first(storage.definitionCount),
         std::span(storage.saleRows).first(storage.saleRowCount),
         std::span(storage.installedRows).first(storage.installedRowCount));
-    report(storage, published ? "ok" : "publish");
+    report(storage, skipped, published ? "ok" : "publish");
     return published;
 }
 
