@@ -790,6 +790,16 @@ void report_purchase(std::uint16_t opcode,
     }
 }
 
+/** What a substitution rule said about one sale row's item. */
+enum class Substitution : std::uint8_t {
+    /** No rule names this item; the row grants what it names. */
+    none,
+    /** A rule names it and its replacement resolved; the row grants the replacement. */
+    replaced,
+    /** A rule names it but its replacement is not in this build; the row must grant nothing. */
+    broken,
+};
+
 /**
  * Answers what a placeholder sale row is really selling.
  *
@@ -805,20 +815,25 @@ void report_purchase(std::uint16_t opcode,
  * vendor or the row, so a placeholder
  * sold by more than one vendor needs one rule rather than one per seller.
  *
+ * A rule whose replacement is absent from this build answers `broken` rather than `none`, because
+ * the rule proves the row's own item is a placeholder - falling back to granting it would be the
+ * exact wrong grant this file exists to prevent, and a wrong grant that commits cleanly is harder
+ * to spot than a refusal. The refusal is logged with both hashes so the rule can be fixed.
+ *
  * @param itemDefinitionIndex Item the row resolved to.
  * @param substituteIndex Receives what should be granted in its place.
- * @return True when a rule names this item and its replacement resolves in this build.
+ * @return What the rule file said about this item.
  */
-[[nodiscard]] bool substitute_for_item(std::uint16_t itemDefinitionIndex,
-                                       std::uint16_t& substituteIndex) noexcept {
+[[nodiscard]] Substitution substitute_for_item(std::uint16_t itemDefinitionIndex,
+                                               std::uint16_t& substituteIndex) noexcept {
     substituteIndex = kUnavailableDefinitionIndex;
     state::build_data::items::Definition sold{};
     if (!state::build_data::find_item_definition_index(itemDefinitionIndex, sold)) {
-        return false;
+        return Substitution::none;
     }
     static std::array<char, core::rule_text::kRuleTextCapacity> text{};
     if (!core::path::read_artifact_text(L"vendor_item_substitute.txt", text)) {
-        return false;
+        return Substitution::none;
     }
     core::rule_text::Cursor rules{text.data()};
     while (rules.seek_field()) {
@@ -828,28 +843,33 @@ void report_purchase(std::uint16_t opcode,
             continue;
         }
         state::build_data::items::Definition replacement{};
-        if (!state::build_data::find_item_definition_hash(grantHash, replacement)) {
-            // Named but absent from this build, which is a rule to fix rather than a row to grant
-            // the placeholder for.
-            return false;
+        const bool resolved = state::build_data::find_item_definition_hash(grantHash, replacement);
+        if (resolved) {
+            substituteIndex = replacement.definitionIndex;
         }
-        substituteIndex = replacement.definitionIndex;
         std::array<char, core::log::kLineCapacity> line{};
         const int used =
-            std::snprintf(line.data(),
-                          line.size(),
-                          "ev=vendor stage=substitute sold=0x%08X granted=0x%08X item=%u",
-                          sold.definitionHash,
-                          replacement.definitionHash,
-                          static_cast<unsigned>(replacement.definitionIndex));
+            resolved ? std::snprintf(line.data(),
+                                     line.size(),
+                                     "ev=vendor stage=substitute sold=0x%08X granted=0x%08X "
+                                     "item=%u",
+                                     sold.definitionHash,
+                                     replacement.definitionHash,
+                                     static_cast<unsigned>(replacement.definitionIndex))
+                     : std::snprintf(line.data(),
+                                     line.size(),
+                                     "ev=vendor stage=substitute result=fail reason=missing "
+                                     "sold=0x%08X named=0x%08X",
+                                     sold.definitionHash,
+                                     grantHash);
         if (used > 0) {
             core::log::write(core::log::Channel::server,
-                             core::log::Level::info,
+                             resolved ? core::log::Level::info : core::log::Level::warn,
                              {line.data(), static_cast<std::size_t>(used)});
         }
-        return true;
+        return resolved ? Substitution::replaced : Substitution::broken;
     }
-    return false;
+    return Substitution::none;
 }
 
 /**
@@ -1767,8 +1787,17 @@ RowOutcome settle_vendor_row(const middleware::web_service::Message& message,
     // never receives what it offered.
     std::uint16_t granted = itemDefinitionIndex;
     std::uint16_t substituteIndex = kUnavailableDefinitionIndex;
-    if (substitute_for_item(granted, substituteIndex)) {
+    switch (substitute_for_item(granted, substituteIndex)) {
+    case Substitution::replaced:
         granted = substituteIndex;
+        break;
+    case Substitution::broken:
+        // The rule proves the row's item is a placeholder, so granting it would be the wrong
+        // grant this path exists to prevent. The rule itself already logged what is missing.
+        report_purchase(opcode, "fail", "substitute_missing", vendorIndex, rowIndex, granted);
+        return RowOutcome::grantRefused;
+    case Substitution::none:
+        break;
     }
     std::uint16_t collectibleIndex = state::build_data::collectibles::kNoCollectibleIndex;
     const bool collected = find_collectible_for_item(granted, collectibleIndex);
