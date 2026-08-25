@@ -34,7 +34,7 @@ inline constexpr std::uint32_t kCacheFormatVersion = 51;
  * Bump it when a stored shape changes, and when the extraction filling it changes what it writes.
  * A cached row survives a code change, so a corrected walk keeps publishing the old rows.
  */
-inline constexpr std::uint32_t kCacheFormatVersion = 45;
+inline constexpr std::uint32_t kCacheFormatVersion = 46;
 /** Signed -1 on disk means there is no equipment slot. */
 inline constexpr std::int8_t kAbsentEquipmentSlot = -1;
 

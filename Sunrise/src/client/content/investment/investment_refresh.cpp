@@ -73,6 +73,18 @@ bool refresh() noexcept {
         // The same lock as the extraction path. A cache write holds its own lock across file
         // calls, so a held thread stopped inside one would deadlock the freeze below.
         AcquireSRWLockExclusive(&g_refreshLock);
+        // The vendor catalog is deliberately not part of `ready()` - a boot without vendors is
+        // still a boot - but a restored cache can carry every mapping domain and no catalog,
+        // because the boot that wrote it lost the vendor pass. Every domain in `ready()` retries
+        // through the pass below until it publishes; this is the one domain that gate skips, so
+        // it gets one retry here. Once per session, because a pass that failed against these
+        // packages will keep failing against them, and its own log lines already say why.
+        static bool vendorRetryDone = false;
+        if (!vendorRetryDone && !state::build_data::vendor_catalog_ready()
+            && items::packages::readable()) {
+            vendorRetryDone = true;
+            (void)items::packages::build();
+        }
         const bool persisted = state::ensure_profile_item_identities()
                        && state::ensure_character_subclasses()
                        && emote_collection_settled()
