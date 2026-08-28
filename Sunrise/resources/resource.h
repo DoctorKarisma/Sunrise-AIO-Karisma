@@ -25,3 +25,15 @@
 
 /** Compact weapon-rarity lookup used by catalog filters. */
 #define IDR_ITEM_RARITY 107
+
+/** Default vendor catalog rules bundled into the DLL. */
+#define IDR_VENDOR_CATALOG 108
+
+/** Default vendor repeatable-bounty pools bundled into the DLL. */
+#define IDR_VENDOR_BOUNTY_ROLL 109
+
+/** Default vendor exchange/recycling rules bundled into the DLL. */
+#define IDR_VENDOR_EXCHANGE 110
+
+/** Default vendor placeholder-item substitution rules bundled into the DLL. */
+#define IDR_VENDOR_ITEM_SUBSTITUTE 111
