@@ -8,6 +8,8 @@ namespace sunrise::core::ui::hud {
 enum class Overlay : std::uint8_t {
     /** The Sunrise name, version and animated logo. */
     logoCard,
+    /** The local player's current world coordinates. */
+    coordinates,
     /** Where the player is: activity, bubble, slice set and closest spawn. */
     currentStatus,
     /** The instances of the session the player is in. */
@@ -46,7 +48,7 @@ void set_enabled(Overlay overlay, bool on) noexcept;
 /** @param line Status line to name. @return Its menu label. */
 [[nodiscard]] const char* display_name(StatusLine line) noexcept;
 
-/** @param line Status line to read. @return True while it draws. */
+/** @param line Status line to read. @return True while the status line draws. */
 [[nodiscard]] bool enabled(StatusLine line) noexcept;
 
 /** @param line Status line to switch. @param on New switch state. */

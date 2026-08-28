@@ -5,8 +5,10 @@
 
 #include <array>
 #include <cstddef>
+#include <cstdio>
 #include <imgui.h>
 
+#include "../../../client/hooks/teleport/runtime.h"
 #include "../scaling/dpi/ui_dpi_scaling.h"
 #include "overlay.h"
 #include "overlays/ui_hud_logo_overlay.h"
@@ -16,6 +18,29 @@
 
 namespace sunrise::core::ui::hud {
 namespace {
+
+/** Draws the local player's current world coordinates as one compact HUD line. */
+void draw_coordinates() noexcept {
+    std::array<float, 3> position{};
+
+    ImGui::TextDisabled("XYZ");
+    ImGui::SameLine();
+
+    if (!client::hooks::teleport::current_position(position)) {
+        ImGui::TextUnformatted("--  --  --");
+        return;
+    }
+
+    char coordinates[96]{};
+    (void)std::snprintf(coordinates,
+                        sizeof(coordinates),
+                        "%.2f  %.2f  %.2f",
+                        static_cast<double>(position[0]),
+                        static_cast<double>(position[1]),
+                        static_cast<double>(position[2]));
+
+    ImGui::TextUnformatted(coordinates);
+}
 
 /** One overlay's identity, frame entry and starting switch state. */
 struct Entry {
@@ -29,23 +54,29 @@ struct Entry {
 
 /** 24 pixels keep the stack clear of the viewport corner, as the other overlays do. */
 constexpr float kViewportMargin = 24.0F;
+
 /** 8 pixels separate two stacked overlays. */
 constexpr float kOverlayGap = 8.0F;
+
 /** Overlays carry no decoration, take no input, and are never saved. */
 constexpr ImGuiWindowFlags kOverlayFlags =
     ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav
     | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_AlwaysAutoResize
     | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoMove;
+
 /** Overlay count, taken from the enum so the table and the switches cannot disagree. */
 constexpr std::size_t kOverlayCount = static_cast<std::size_t>(Overlay::count);
+
 /** Status-line count, taken from the enum for the same reason. */
 constexpr std::size_t kStatusLineCount = static_cast<std::size_t>(StatusLine::count);
+
 /** Every switch the file carries: one per overlay, then one per status line. */
 constexpr std::size_t kSwitchCount = kOverlayCount + kStatusLineCount;
 
 /** Every overlay, in Overlay order. The menu lists them and the corner stacks them in it. */
 constexpr std::array<Entry, kOverlayCount> kOverlays{
     Entry{"Sunrise Card", "sunrise_card", "##sunrise_hud_card", &overlays::logo::draw, true},
+    Entry{"Coordinates", "coordinates", "##sunrise_hud_coordinates", &draw_coordinates, false},
     // Both start off: they report what the server is doing, which no ordinary run needs on screen.
     Entry{
         "Current Status", "current_status", "##sunrise_hud_status", &overlays::status::draw, false},
@@ -88,6 +119,7 @@ constexpr std::array<LineEntry, kStatusLineCount> kStatusLines{
 
 /** Switch state. Only the presentation thread reads or writes it. */
 std::array<bool, kOverlayCount> g_enabled{starting_state()};
+
 /** Status-line switch state, on the same thread. */
 std::array<bool, kStatusLineCount> g_lineEnabled{starting_line_state()};
 
@@ -104,18 +136,22 @@ std::array<bool, kStatusLineCount> g_lineEnabled{starting_line_state()};
 /** @return Every file key paired with the switch state it holds now. */
 [[nodiscard]] std::array<store::Switch, kSwitchCount> switch_state() noexcept {
     std::array<store::Switch, kSwitchCount> switches{};
+
     for (std::size_t index = 0; index < kOverlayCount; ++index) {
         switches[index] = {kOverlays[index].storageKey, g_enabled[index]};
     }
+
     for (std::size_t index = 0; index < kStatusLineCount; ++index) {
         switches[kOverlayCount + index] = {kStatusLines[index].storageKey, g_lineEnabled[index]};
     }
+
     return switches;
 }
 
 /** Writes every switch. One file holds them all, so a partial save would drop the rest. */
 void save_switches() noexcept {
     const std::array<store::Switch, kSwitchCount> switches = switch_state();
+
     // A failed write is reported by the store and never blocks the switch itself.
     (void)store::save(switches);
 }
@@ -128,13 +164,16 @@ void save_switches() noexcept {
  */
 [[nodiscard]] float draw_overlay(const Entry& entry, const ImVec2& position) noexcept {
     ImGui::SetNextWindowPos(position, ImGuiCond_Always);
+
     const bool submitContents = ImGui::Begin(entry.windowId, nullptr, kOverlayFlags);
     if (submitContents) {
         entry.draw();
     }
+
     // Read inside the window, because the size belongs to it and not to the caller's window.
     const float height = ImGui::GetWindowSize().y;
     ImGui::End();
+
     return height;
 }
 
@@ -143,11 +182,14 @@ void save_switches() noexcept {
 /** Resolves the switch file and applies the saved state. */
 void initialize(void* module) noexcept {
     store::initialize(module);
+
     std::array<store::Switch, kSwitchCount> switches = switch_state();
     store::load(switches);
+
     for (std::size_t index = 0; index < kOverlayCount; ++index) {
         g_enabled[index] = switches[index].on;
     }
+
     for (std::size_t index = 0; index < kStatusLineCount; ++index) {
         g_lineEnabled[index] = switches[kOverlayCount + index].on;
     }
@@ -173,6 +215,7 @@ void set_enabled(Overlay overlay, bool on) noexcept {
     if (!in_range(overlay) || g_enabled[static_cast<std::size_t>(overlay)] == on) {
         return;
     }
+
     g_enabled[static_cast<std::size_t>(overlay)] = on;
     save_switches();
 }
@@ -192,6 +235,7 @@ void set_enabled(StatusLine line, bool on) noexcept {
     if (!in_range(line) || g_lineEnabled[static_cast<std::size_t>(line)] == on) {
         return;
     }
+
     g_lineEnabled[static_cast<std::size_t>(line)] = on;
     save_switches();
 }
@@ -199,20 +243,30 @@ void set_enabled(StatusLine line, bool on) noexcept {
 /** Draws every enabled overlay, stacked down the top-left corner. */
 bool draw(bool interfaceEnabled) noexcept {
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
+
     if (!interfaceEnabled || viewport == nullptr) {
         return false;
     }
+
     const float margin = scaling::dpi::pixels(kViewportMargin);
     const float gap = scaling::dpi::pixels(kOverlayGap);
-    ImVec2 position{viewport->WorkPos.x + margin, viewport->WorkPos.y + margin};
+
+    ImVec2 position{
+        viewport->WorkPos.x + margin,
+        viewport->WorkPos.y + margin,
+    };
+
     bool drawn = false;
+
     for (std::size_t index = 0; index < kOverlayCount; ++index) {
         if (!g_enabled[index]) {
             continue;
         }
+
         position.y += draw_overlay(kOverlays[index], position) + gap;
         drawn = true;
     }
+
     return drawn;
 }
 
