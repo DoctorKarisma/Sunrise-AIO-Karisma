@@ -1,3 +1,13 @@
+> [!IMPORTANT]
+> This release is outdated.
+>
+> The current project is now **Sunrise-AIO-Cowisma**:
+> https://github.com/DoctorKarisma/Sunrise-AIO-Cowisma
+
+
+
+
+
 ## Sunrise-AIO
 
 This is a community-maintained all-in-one build of Sunrise, combining the latest changes from upstream repositories with additional features and improvements from various community forks. Since these features were developed independently using different implementations, compatibility between them is not guaranteed and conflicts or bugs may occur.
