@@ -1,7 +1,7 @@
 > [!IMPORTANT]
-> This release is outdated.
+> # This repository is outdated.
 >
->🐄 New project: **Sunrise-AIO-Cowisma**
+># 🐄 New project: **Sunrise-AIO-Cowisma**
 >
 >Development has moved to Sunrise-AIO-Cowisma, a new version based on Sunrise-Cow and incorporating selected features from this AIO.
 >
