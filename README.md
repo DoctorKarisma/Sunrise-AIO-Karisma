@@ -1,10 +1,13 @@
 > [!IMPORTANT]
 > This release is outdated.
 >
-> The current project is now **Sunrise-AIO-Cowisma**:
-> https://github.com/DoctorKarisma/Sunrise-AIO-Cowisma
-
-
+>🐄 New project: **Sunrise-AIO-Cowisma**
+>
+>Development has moved to Sunrise-AIO-Cowisma, a new version based on Sunrise-Cow and incorporating selected features from this AIO.
+>
+>This repository is kept for the original AIO and historical/reference purposes.
+>
+>→ Sunrise-Cowisma-AIO: [DoctorKarisma/Sunrise-AIO-Cowisma](https://github.com/DoctorKarisma/Sunrise-AIO-Cowisma)
 
 
 
